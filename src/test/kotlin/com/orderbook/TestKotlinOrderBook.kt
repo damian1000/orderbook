@@ -4,8 +4,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-class TestSimpleOrderBook {
-    private val orderBook: OrderBook = SimpleOrderBook()
+class TestKotlinOrderBook {
+    private lateinit var orderBook: OrderBook
 
     companion object {
         const val DETA = 0.00000001
@@ -13,6 +13,7 @@ class TestSimpleOrderBook {
 
     @BeforeEach
     fun setup() {
+        orderBook = KotlinOrderBook()
         orderBook.addOrder(Order(1L, 19.0, 'O', 8))
         orderBook.addOrder(Order(2L, 19.0, 'O', 4))
         orderBook.addOrder(Order(5L, 22.0, 'O', 7))
@@ -114,5 +115,36 @@ class TestSimpleOrderBook {
         assertEquals(6.0, bids[0].id.toDouble(), DETA)
         assertEquals(8.0, bids[1].id.toDouble(), DETA)
         assertEquals(9.0, bids[2].id.toDouble(), DETA)
+    }
+
+    @Test
+    fun testModifyPreservesTimePriorityAtSamePrice() {
+        orderBook.modifyOrder(1L, 12)
+
+        val offers = orderBook.getOrders('O')
+        assertEquals(1L, offers[0].id)
+        assertEquals(12L, offers[0].size)
+        assertEquals(2L, offers[1].id)
+        assertEquals(16L, offers[2].size)
+    }
+
+    @Test
+    fun testAddExistingIdRemovesOldOrder() {
+        orderBook.addOrder(Order(1L, 23.0, 'O', 11))
+
+        val offers = orderBook.getOrders('O')
+        assertEquals(listOf(2L, 3L, 4L, 5L, 1L), offers.map { it.id })
+        assertEquals(4L, orderBook.getTotalSize('O', 1))
+        assertEquals(23.0, orderBook.getPrice('O', 4), DETA)
+        assertEquals(11L, orderBook.getTotalSize('O', 4))
+    }
+
+    @Test
+    fun testAddExistingIdCanMoveSides() {
+        orderBook.addOrder(Order(1L, 16.0, 'B', 11))
+
+        assertEquals(listOf(2L, 3L, 4L, 5L), orderBook.getOrders('O').map { it.id })
+        assertEquals(listOf(1L, 6L, 8L, 9L), orderBook.getOrders('B').map { it.id })
+        assertEquals(16.0, orderBook.getPrice('B', 1), DETA)
     }
 }

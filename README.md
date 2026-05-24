@@ -21,21 +21,22 @@ Sides: `B` = bid (buy), `O` = offer (sell). Best bid = highest price; best offer
 
 ## Design
 
-- **`buyOrders`**: `ConcurrentSkipListMap<Double, LinkedList<Order>>` with reverse natural ordering — highest bid first.
-- **`sellOrders`**: `ConcurrentSkipListMap<Double, LinkedList<Order>>` with natural ordering — lowest offer first.
-- **`ordersMap`**: `ConcurrentHashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
+- **`buyOrders`**: `TreeMap<Double, LinkedList<Order>>` with reverse natural ordering — highest bid first.
+- **`sellOrders`**: `TreeMap<Double, LinkedList<Order>>` with natural ordering — lowest offer first.
+- **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
 - Per-price queues are `LinkedList<Order>` so insertion order = time priority.
-- Mutations to `ordersMap` use `compute` to keep id-lookup and per-price-queue updates consistent under contention.
-- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — *not* by moving it to the tail. (See `updateOrder` — same `LinkedList<Order>.add(newOrder)` keeps the FIFO unless the order is removed first.)
+- A `ReentrantReadWriteLock` guards the maps and price queues. Writes are atomic over the full book; reads can run concurrently with other reads.
+- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail.
+- Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
 ## Complexity
 
 | Operation | Cost | Notes |
 |---|---|---|
-| `addOrder` | **O(log P)** | `P` = distinct price levels on that side; `LinkedList.add` is O(1) |
-| `removeOrder` | **O(log P + N_p)** | id-lookup O(1); `LinkedList.remove(Order)` is O(N) at that price level |
-| `modifyOrder` | **O(log P + N_p)** | same as remove + add |
-| `getPrice(side, level)` | **O(level)** | iterates the SkipListMap keys until `level` |
+| `addOrder` | **O(log P)** | `P` = distinct price levels on that side; replacing an existing id also removes its old queue entry |
+| `removeOrder` | **O(log P + N_p)** | id-lookup O(1); removing from the `LinkedList` is O(N) at that price level |
+| `modifyOrder` | **O(log P + N_p)** | finds and replaces the existing queue element in place |
+| `getPrice(side, level)` | **O(1)** for level 1, otherwise **O(level)** | uses `TreeMap.firstKey()` for best price; otherwise iterates keys until `level` |
 | `getTotalSize(side, level)` | **O(level + N_p)** | sums the LinkedList at that level |
 | `getOrders(side)` | **O(P + N)** | walks all per-price queues |
 
@@ -43,14 +44,14 @@ The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking e
 
 ## Concurrency
 
-- Reads (`getPrice`, `getTotalSize`, `getOrders`) are lock-free against the concurrent maps but **don't see consistent snapshots** across multiple calls.
-- Writes (`addOrder`, `modifyOrder`, `removeOrder`) are individually atomic through `ConcurrentHashMap.compute`. Cross-collection invariants (id-map vs. price-map) hold per-operation, not across them.
-- This is fine for the spec; a production engine would either pin a single writer per side or use a more sophisticated transaction structure.
+- Reads (`getPrice`, `getTotalSize`, `getOrders`) take a read lock and see a consistent snapshot for that individual call.
+- Writes (`addOrder`, `modifyOrder`, `removeOrder`) take a write lock, so id lookup and price-level queues stay consistent.
+- This is fine for the spec; a production engine would likely pin a single writer per side or use a more specialized transaction structure.
 
 ## Run
 
 ```bash
-./gradlew test     # all 16 tests, deterministic (TestSimpleOrderBook)
+./gradlew test     # all 19 tests, deterministic (TestKotlinOrderBook)
 ./gradlew jmh      # JMH micro-benchmarks (~8 min on JDK 25)
 ```
 
@@ -60,17 +61,19 @@ JMH 1.36, JDK 25.0.1, single-threaded, 3×10s warmup + 5×10s measurement, avera
 
 | Operation | Avg time | 99.9% CI |
 |---|---:|---|
-| `getPrice` (best bid / offer, level 1) | **4 ns** | ±1 ns |
-| `modifyOrder` (existing id, same price) | **120 ns** | ±10 ns |
-| `getTotalSize` at level 5 | **150 ns** | ±2 ns |
-| `addOrder` (random side / price) | **347 ns** | ±29 ns |
-| `addOrder` + `removeOrder` pair | **546 ns** | ±62 ns |
+| `getPrice` best bid, level 1 | **28 ns** | ±23 ns |
+| `getPrice` best offer, level 1 | **22 ns** | ±11 ns |
+| `getTotalSize` at level 5 | **216 ns** | ±145 ns |
+| `addOrder` (random side / price) | **346 ns** | ±13 ns |
+| `modifyOrder` (existing id, same price) | **346 ns** | ±134 ns |
+| `addOrder` + `removeOrder` pair | **578 ns** | ±401 ns |
 
 Reading the table:
-- **Best-price lookup is essentially free** — `ConcurrentSkipListMap.firstEntry()` is O(1).
-- **add ≈ 350 ns** is dominated by skip-list insertion + a `ConcurrentHashMap.compute`.
-- **remove implied** (`addThenRemove − addOrder`) ≈ **200 ns**. The `LinkedList.remove(Order)` is O(N) at the price level, but with the level loadings here it's not the bottleneck.
-- Numbers are single-threaded by design — this is a correctness-first design (concurrent maps + per-op atomicity), not a single-writer low-latency engine. A production matching engine would pin one writer per side and use intrusive linked lists for O(1) cancel.
+- **Best-price lookup is still cheap** — `TreeMap.firstKey()` is O(1), with read-lock overhead included.
+- **add ≈ 350 ns** is dominated by tree insertion and id-map maintenance.
+- **remove implied** (`addThenRemove − addOrder`) ≈ **230 ns**. The `LinkedList.removeIf` is O(N) at the price level, but with the level loadings here it's not the bottleneck.
+- **modify ≈ 350 ns** now searches and replaces the existing list element in place, preserving FIFO priority.
+- Numbers are single-threaded by design — this is a correctness-first design, not a single-writer low-latency engine. A production matching engine would pin one writer per side and use intrusive linked lists for O(1) cancel.
 
 Run on your own hardware:
 
@@ -84,7 +87,7 @@ Tweak iterations/warmup in `build.gradle` under the `jmh { ... }` block.
 ## Use it
 
 ```kotlin
-val book: OrderBook = SimpleOrderBook()
+val book: OrderBook = KotlinOrderBook()
 
 book.addOrder(Order(id = 1L, price = 19.0, side = 'O', size = 8))
 book.addOrder(Order(id = 2L, price = 21.0, side = 'O', size = 16))

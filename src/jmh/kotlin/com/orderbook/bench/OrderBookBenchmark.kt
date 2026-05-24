@@ -1,7 +1,7 @@
 package com.orderbook.bench
 
 import com.orderbook.Order
-import com.orderbook.SimpleOrderBook
+import com.orderbook.KotlinOrderBook
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Level
@@ -27,13 +27,13 @@ open class OrderBookBenchmark {
     @Param("50")
     var priceLevels: Int = 0
 
-    private lateinit var book: SimpleOrderBook
+    private lateinit var book: KotlinOrderBook
     private val nextId = AtomicLong()
     private lateinit var knownIds: LongArray
 
     @Setup(Level.Iteration)
     fun setup() {
-        book = SimpleOrderBook()
+        book = KotlinOrderBook()
         nextId.set(0)
         val rng = Random(42)
         knownIds = LongArray(prepopulated)
