@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'org.jetbrains.kotlin.jvm' version '2.3.21'
+    id 'me.champeau.jmh' version '0.7.2'
 }
 
 version = '1.0.0'
@@ -33,4 +34,14 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+jmh {
+    fork = 1
+    warmupIterations = 3
+    iterations = 5
+    benchmarkMode = ['avgt']
+    timeUnit = 'us'
+    resultFormat = 'JSON'
+    resultsFile = project.file("${buildDir}/reports/jmh/results.json")
 }

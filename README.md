@@ -50,10 +50,36 @@ The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking e
 ## Run
 
 ```bash
-./gradlew test
+./gradlew test     # all 16 tests, deterministic (TestSimpleOrderBook)
+./gradlew jmh      # JMH micro-benchmarks (~8 min on JDK 25)
 ```
 
-All 16 tests pass deterministically (`TestSimpleOrderBook`).
+## Benchmarks
+
+JMH 1.36, JDK 25.0.1, single-threaded, 3×10s warmup + 5×10s measurement, average time per op. Book pre-populated with 10,000 orders across 50 price levels.
+
+| Operation | Avg time | 99.9% CI |
+|---|---:|---|
+| `getPrice` (best bid / offer, level 1) | **4 ns** | ±1 ns |
+| `modifyOrder` (existing id, same price) | **120 ns** | ±10 ns |
+| `getTotalSize` at level 5 | **150 ns** | ±2 ns |
+| `addOrder` (random side / price) | **347 ns** | ±29 ns |
+| `addOrder` + `removeOrder` pair | **546 ns** | ±62 ns |
+
+Reading the table:
+- **Best-price lookup is essentially free** — `ConcurrentSkipListMap.firstEntry()` is O(1).
+- **add ≈ 350 ns** is dominated by skip-list insertion + a `ConcurrentHashMap.compute`.
+- **remove implied** (`addThenRemove − addOrder`) ≈ **200 ns**. The `LinkedList.remove(Order)` is O(N) at the price level, but with the level loadings here it's not the bottleneck.
+- Numbers are single-threaded by design — this is a correctness-first design (concurrent maps + per-op atomicity), not a single-writer low-latency engine. A production matching engine would pin one writer per side and use intrusive linked lists for O(1) cancel.
+
+Run on your own hardware:
+
+```bash
+./gradlew jmh
+cat build/reports/jmh/results.json   # full JSON output
+```
+
+Tweak iterations/warmup in `build.gradle` under the `jmh { ... }` block.
 
 ## Use it
 
