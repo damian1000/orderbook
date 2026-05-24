@@ -35,3 +35,19 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Kotlin ###
+.kotlin/
+
+### Secrets ###
+.env
+.env.local
+*.pem
+*.ppk
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/keys/
+**/secrets/
