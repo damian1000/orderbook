@@ -1,4 +1,4 @@
-package com.orderbook
+package io.github.damian1000.orderbook
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach

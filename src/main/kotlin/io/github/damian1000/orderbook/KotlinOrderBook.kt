@@ -1,4 +1,4 @@
-package com.orderbook
+package io.github.damian1000.orderbook
 
 import java.util.*
 import java.util.concurrent.locks.ReentrantReadWriteLock

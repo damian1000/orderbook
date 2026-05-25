@@ -1,4 +1,4 @@
-package com.orderbook
+package io.github.damian1000.orderbook
 
 interface OrderBook {
     fun addOrder(order: Order)

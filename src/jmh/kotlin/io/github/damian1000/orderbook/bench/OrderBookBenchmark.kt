@@ -1,7 +1,7 @@
-package com.orderbook.bench
+package io.github.damian1000.orderbook.bench
 
-import com.orderbook.Order
-import com.orderbook.KotlinOrderBook
+import io.github.damian1000.orderbook.Order
+import io.github.damian1000.orderbook.KotlinOrderBook
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Level
