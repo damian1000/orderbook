@@ -1,6 +1,8 @@
 package io.github.damian1000.orderbook
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -146,5 +148,45 @@ class TestKotlinOrderBook {
         assertEquals(listOf(2L, 3L, 4L, 5L), orderBook.getOrders('O').map { it.id })
         assertEquals(listOf(1L, 6L, 8L, 9L), orderBook.getOrders('B').map { it.id })
         assertEquals(16.0, orderBook.getPrice('B', 1), DETA)
+    }
+
+    @Test
+    fun modifyUnknownIdIsNoOp() {
+        orderBook.modifyOrder(999L, 50)
+        // No change to existing book state
+        assertEquals(listOf(1L, 2L, 3L, 4L, 5L), orderBook.getOrders('O').map { it.id })
+        assertEquals(12L, orderBook.getTotalSize('O', 1))
+    }
+
+    @Test
+    fun removeUnknownIdIsNoOp() {
+        orderBook.removeOrder(999L)
+        assertEquals(5, orderBook.getOrders('O').size)
+        assertEquals(3, orderBook.getOrders('B').size)
+    }
+
+    @Test
+    fun invalidSideThrowsOnEveryQuery() {
+        assertThrows(IllegalArgumentException::class.java) { orderBook.getPrice('X', 1) }
+        assertThrows(IllegalArgumentException::class.java) { orderBook.getTotalSize('X', 1) }
+        assertThrows(IllegalArgumentException::class.java) { orderBook.getOrders('X') }
+        assertThrows(IllegalArgumentException::class.java) { orderBook.addOrder(Order(99L, 1.0, 'X', 1)) }
+    }
+
+    @Test
+    fun levelZeroAndNegativeReturnZero() {
+        assertEquals(0.0, orderBook.getPrice('O', 0), DETA)
+        assertEquals(0.0, orderBook.getPrice('O', -1), DETA)
+        assertEquals(0L, orderBook.getTotalSize('O', 0))
+        assertEquals(0L, orderBook.getTotalSize('O', -1))
+    }
+
+    @Test
+    fun emptyBookGetOrdersReturnsEmptyList() {
+        val empty = KotlinOrderBook()
+        assertTrue(empty.getOrders('O').isEmpty())
+        assertTrue(empty.getOrders('B').isEmpty())
+        assertEquals(0.0, empty.getPrice('O', 1), DETA)
+        assertEquals(0L, empty.getTotalSize('B', 1))
     }
 }
