@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.jetbrains.kotlin.jvm' version '2.3.21'
     id 'me.champeau.jmh' version '0.7.2'
+    id 'jacoco'
 }
 
 version = '1.0.0'
@@ -34,6 +35,15 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
 }
 
 jmh {
