@@ -1,5 +1,28 @@
 # TODO
 
+## Roadmap (prioritized)
+
+External review picked this as the candidate flagship. Whether to actually flagship it depends on which story it tells — see P2 below.
+
+### P1 — quick correctness/API wins
+
+- **Replace `Char` with a `Side` enum.** Stops a whole class of bugs (`getPrice('X', 1)` is currently caught at runtime; an enum makes it a compile error). Already noted in API hardening below.
+- **Reject invalid order data instead of silently passing it through.** Non-positive size, negative price, `NaN`/infinite price should throw at the API boundary, not flow through to corrupt the book.
+- **Stop using `0.0` as a missing-level sentinel for `getPrice`.** It collides with a legitimate price of zero and a legitimate empty-side query. Return `null` (Kotlin nullable) or throw on out-of-range level; pick one and document it.
+
+### P2 — pick the story
+
+The repo has two plausible identities. Pick one and commit; trying to be both ends up shallow on both.
+
+- **Story A — "concurrent in-memory data structure".** Lean into what's already here. Add property-based tests, expose proper read snapshots, add multi-threaded JMH benchmarks (read-heavy, write-heavy, mixed). Keep `Double` for price — it's fine for a data-structure demo. Small repo, sharp focus, easy to read.
+- **Story B — "small matching engine".** Bigger swing. Add real matching with partial fills, cancel/replace, market orders, execution reports. Switch to integer ticks (idiomatic in HFT). Latency histograms with p50/p99/p99.9 rather than just JMH average time. This is the version that earns "exchange tech" framing — but it's weeks of focused work, not days.
+
+### P3 — stretch (only if Story B is chosen)
+
+- Allocation/GC profiling using JFR or async-profiler, with results pinned in the README.
+- A single-writer implementation alongside the lock-based one, benchmarked head-to-head.
+- Linearizability testing (Lincheck on JVM) layered over the existing concurrency stress tests.
+
 ## Correctness And API Hardening
 
 - Decide and document the expected behavior for invalid order data:
