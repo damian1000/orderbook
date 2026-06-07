@@ -11,7 +11,6 @@
 - Consider replacing `Char` side values with an enum such as `Side.BID` / `Side.OFFER` to avoid runtime validation errors from typos.
 ## Concurrency
 
-- Add stress tests for concurrent add, remove, modify, and read operations.
 - Verify that read snapshots are sufficient for intended consumers. Current reads are consistent per method call, but multiple calls can still observe different book states.
 - Consider whether writes should use a fair `ReentrantReadWriteLock` if writer starvation becomes a concern under heavy read load.
 
