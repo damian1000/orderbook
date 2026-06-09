@@ -52,7 +52,7 @@ The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking e
 ## Run
 
 ```bash
-./gradlew test     # all 19 tests, deterministic (TestKotlinOrderBook)
+./gradlew test     # 26 unit tests + 4 concurrency stress tests, deterministic
 ./gradlew jmh      # JMH micro-benchmarks (~8 min on JDK 25)
 ```
 
