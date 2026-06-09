@@ -61,16 +61,16 @@ JMH 1.36, JDK 25.0.1, single-threaded, 3×10s warmup + 5×10s measurement, avera
 
 | Operation | Avg time | 99.9% CI |
 |---|---:|---|
-| `getPrice` best bid, level 1 | **28 ns** | ±23 ns |
-| `getPrice` best offer, level 1 | **22 ns** | ±11 ns |
-| `getTotalSize` at level 5 | **216 ns** | ±145 ns |
-| `modifyOrder` (existing id, same price) | **346 ns** | ±134 ns |
-| `addOrder` + `removeOrder` pair | **578 ns** | ±401 ns |
+| `getPrice` best bid, level 1 | **17 ns** | ±6 ns |
+| `getPrice` best offer, level 1 | **18 ns** | ±2 ns |
+| `getTotalSize` at level 5 | **342 ns** | ±214 ns |
+| `modifyOrder` (existing id, same price) | **322 ns** | ±201 ns |
+| `addOrder` + `removeOrder` pair | **401 ns** | ±54 ns |
 
 Reading the table:
-- **Best-price lookup is still cheap** — `TreeMap.firstKey()` is O(1), with read-lock overhead included.
-- **Steady-state add/remove pair under 600 ns** is the honest throughput number — book size is stationary across the measurement window.
-- **modify ≈ 350 ns** searches and replaces the existing list element in place, preserving FIFO priority.
+- **Best-price lookup is ~17 ns** — `TreeMap.firstKey()` is O(1), with read-lock overhead included. The nullable `Double?` return introduced for unambiguous "no level" semantics did not measurably move the number.
+- **Steady-state add/remove pair under 500 ns** is the honest throughput number — book size is stationary across the measurement window.
+- **modify ≈ 320 ns** searches and replaces the existing list element in place, preserving FIFO priority.
 - Numbers are single-threaded by design — this is a correctness-first design, not a single-writer low-latency engine. A production matching engine would pin one writer per side and use intrusive linked lists for O(1) cancel.
 
 **Why no standalone `addOrder` row.** The `addOrder` JMH benchmark exists in the source but is excluded from the headline numbers: book size grows unboundedly inside each iteration's 10-second measurement window, so any single average mixes operation cost at many different book sizes. Steady-state throughput is reported via the add/remove pair instead. A fixed-burst variant with `@OperationsPerInvocation` is on the TODO.
@@ -78,11 +78,11 @@ Reading the table:
 Run on your own hardware:
 
 ```bash
-./gradlew jmh
+./gradlew jmh --no-configuration-cache
 cat build/reports/jmh/results.json   # full JSON output
 ```
 
-Tweak iterations/warmup in `build.gradle` under the `jmh { ... }` block.
+The `--no-configuration-cache` flag is needed because the `me.champeau.jmh` plugin's `jmhJar` task is not yet config-cache-compatible. Tweak iterations/warmup in `build.gradle` under the `jmh { ... }` block.
 
 ## Use it
 

@@ -4,6 +4,7 @@ plugins {
     id 'me.champeau.jmh' version '0.7.2'
     id 'jacoco'
     id 'com.diffplug.spotless' version '7.0.4'
+    id 'org.owasp.dependencycheck' version '12.1.0'
 }
 
 version = '1.0.0'
@@ -81,4 +82,17 @@ jmh {
     timeUnit = 'us'
     resultFormat = 'JSON'
     resultsFile = project.file("${buildDir}/reports/jmh/results.json")
+}
+
+// OWASP dependency vulnerability scanner. Run: ./gradlew dependencyCheckAnalyze
+// Fails the build on any dependency with CVSS >= 7.0.
+dependencyCheck {
+    failBuildOnCVSS = 7.0f
+    formats = ['HTML', 'JSON']
+    analyzers {
+        assemblyEnabled = false
+        nodeEnabled = false
+        nodeAuditEnabled = false
+        nuspecEnabled = false
+    }
 }
