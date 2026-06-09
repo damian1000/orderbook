@@ -20,26 +20,29 @@ class KotlinOrderBook : OrderBook {
         }
     }
 
-    override fun modifyOrder(orderId: Long, size: Long) {
+    override fun modifyOrder(orderId: Long, size: Long): Boolean {
         require(size > 0) { "size must be positive, got $size" }
-        lock.write {
-            val order = ordersMap[orderId] ?: return
-            val ordersAtPrice = ordersForSide(order.side)[order.price] ?: return
+        return lock.write {
+            val order = ordersMap[orderId] ?: return@write false
+            val ordersAtPrice = ordersForSide(order.side)[order.price] ?: return@write false
             val newOrder = Order(order.id, order.price, order.side, size)
             val iterator = ordersAtPrice.listIterator()
             while (iterator.hasNext()) {
                 if (iterator.next().id == orderId) {
                     iterator.set(newOrder)
                     ordersMap[orderId] = newOrder
-                    return
+                    return@write true
                 }
             }
+            false
         }
     }
 
-    override fun removeOrder(orderId: Long) {
-        lock.write {
-            ordersMap.remove(orderId)?.let { removeOrderFromBook(it) }
+    override fun removeOrder(orderId: Long): Boolean {
+        return lock.write {
+            val removed = ordersMap.remove(orderId) ?: return@write false
+            removeOrderFromBook(removed)
+            true
         }
     }
 

@@ -3,6 +3,7 @@ package io.github.damian1000.orderbook
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -147,16 +148,27 @@ class TestKotlinOrderBook {
 
     @Test
     fun modifyUnknownIdIsNoOp() {
-        orderBook.modifyOrder(999L, 50)
+        assertFalse(orderBook.modifyOrder(999L, 50))
         assertEquals(listOf(1L, 2L, 3L, 4L, 5L), orderBook.getOrders(Side.OFFER).map { it.id })
         assertEquals(12L, orderBook.getTotalSize(Side.OFFER, 1))
     }
 
     @Test
+    fun modifyKnownIdReturnsTrue() {
+        assertTrue(orderBook.modifyOrder(1L, 99))
+    }
+
+    @Test
     fun removeUnknownIdIsNoOp() {
-        orderBook.removeOrder(999L)
+        assertFalse(orderBook.removeOrder(999L))
         assertEquals(5, orderBook.getOrders(Side.OFFER).size)
         assertEquals(3, orderBook.getOrders(Side.BID).size)
+    }
+
+    @Test
+    fun removeKnownIdReturnsTrue() {
+        assertTrue(orderBook.removeOrder(1L))
+        assertFalse(orderBook.removeOrder(1L))
     }
 
     @Test
