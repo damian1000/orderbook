@@ -1,6 +1,9 @@
 package io.github.damian1000.orderbook
 
-import java.util.*
+import java.util.Comparator
+import java.util.LinkedList
+import java.util.NavigableMap
+import java.util.TreeMap
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -20,7 +23,10 @@ class KotlinOrderBook : OrderBook {
         }
     }
 
-    override fun modifyOrder(orderId: Long, size: Long): Boolean {
+    override fun modifyOrder(
+        orderId: Long,
+        size: Long,
+    ): Boolean {
         require(size > 0) { "size must be positive, got $size" }
         return lock.write {
             val order = ordersMap[orderId] ?: return@write false
@@ -46,34 +52,40 @@ class KotlinOrderBook : OrderBook {
         }
     }
 
-    override fun getPrice(side: Side, level: Int): Double? {
+    override fun getPrice(
+        side: Side,
+        level: Int,
+    ): Double? {
         requireValidLevel(level)
         return lock.read {
             getPrice(ordersForSide(side), level)
         }
     }
 
-    override fun getTotalSize(side: Side, level: Int): Long {
+    override fun getTotalSize(
+        side: Side,
+        level: Int,
+    ): Long {
         requireValidLevel(level)
         return lock.read {
             getTotalSize(ordersForSide(side), level)
         }
     }
 
-    override fun getOrders(side: Side): List<Order> {
-        return lock.read {
+    override fun getOrders(side: Side): List<Order> =
+        lock.read {
             ordersForSide(side).values.flatMap { it.toList() }
         }
-    }
 
     private fun requireValidLevel(level: Int) {
         require(level > 0) { "level must be positive, got $level" }
     }
 
-    private fun ordersForSide(side: Side): NavigableMap<Double, LinkedList<Order>> = when (side) {
-        Side.BID -> buyOrders
-        Side.OFFER -> sellOrders
-    }
+    private fun ordersForSide(side: Side): NavigableMap<Double, LinkedList<Order>> =
+        when (side) {
+            Side.BID -> buyOrders
+            Side.OFFER -> sellOrders
+        }
 
     private fun removeOrderFromBook(order: Order) {
         val orders = ordersForSide(order.side)
@@ -84,7 +96,10 @@ class KotlinOrderBook : OrderBook {
         }
     }
 
-    private fun getPrice(orders: NavigableMap<Double, LinkedList<Order>>, level: Int): Double? {
+    private fun getPrice(
+        orders: NavigableMap<Double, LinkedList<Order>>,
+        level: Int,
+    ): Double? {
         if (level > orders.size) return null
         if (level == 1) return orders.firstKey()
         val orderItr = orders.keys.iterator()
@@ -94,7 +109,10 @@ class KotlinOrderBook : OrderBook {
         return orderItr.next()
     }
 
-    private fun getTotalSize(orders: NavigableMap<Double, LinkedList<Order>>, level: Int): Long {
+    private fun getTotalSize(
+        orders: NavigableMap<Double, LinkedList<Order>>,
+        level: Int,
+    ): Long {
         if (level > orders.size) return 0
         val orderItr = orders.values.iterator()
         for (i in 0 until level - 1) {
@@ -102,5 +120,4 @@ class KotlinOrderBook : OrderBook {
         }
         return orderItr.next().sumOf { it.size }
     }
-
 }

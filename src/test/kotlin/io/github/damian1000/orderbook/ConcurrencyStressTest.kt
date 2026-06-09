@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * about invariants, not performance.
  */
 class ConcurrencyStressTest {
-
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
     fun balancedAddThenRemoveLeavesBookEmpty() {

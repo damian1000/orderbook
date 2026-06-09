@@ -3,6 +3,7 @@ plugins {
     id 'org.jetbrains.kotlin.jvm' version '2.3.21'
     id 'me.champeau.jmh' version '0.7.2'
     id 'jacoco'
+    id 'com.diffplug.spotless' version '7.0.4'
 }
 
 version = '1.0.0'
@@ -43,6 +44,32 @@ jacocoTestReport {
     reports {
         xml.required = true
         html.required = true
+    }
+}
+
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.90
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification
+
+spotless {
+    kotlin {
+        target 'src/**/*.kt'
+        ktlint('1.5.0')
+    }
+    kotlinGradle {
+        target '*.gradle.kts'
+        ktlint('1.5.0')
     }
 }
 

@@ -11,7 +11,10 @@ interface OrderBook {
     fun removeOrder(orderId: Long): Boolean
 
     /** @return `true` if an order with `orderId` existed and was modified. */
-    fun modifyOrder(orderId: Long, size: Long): Boolean
+    fun modifyOrder(
+        orderId: Long,
+        size: Long,
+    ): Boolean
 
     /**
      * @return the price at `level` on `side`, or `null` when fewer than
@@ -19,14 +22,20 @@ interface OrderBook {
      *         price on that side.
      * @throws IllegalArgumentException if `level <= 0`.
      */
-    fun getPrice(side: Side, level: Int): Double?
+    fun getPrice(
+        side: Side,
+        level: Int,
+    ): Double?
 
     /**
      * @return the sum of order sizes at `level` on `side`, or `0` when fewer
      *         than `level` price levels exist on that side.
      * @throws IllegalArgumentException if `level <= 0`.
      */
-    fun getTotalSize(side: Side, level: Int): Long
+    fun getTotalSize(
+        side: Side,
+        level: Int,
+    ): Long
 
     fun getOrders(side: Side): List<Order>
 }

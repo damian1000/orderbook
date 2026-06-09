@@ -21,7 +21,6 @@ import kotlin.random.Random
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 open class OrderBookBenchmark {
-
     @Param("10000")
     var prepopulated: Int = 0
 
@@ -50,7 +49,10 @@ open class OrderBookBenchmark {
 
     private fun nextSide(id: Long): Side = if (id and 1L == 0L) Side.BID else Side.OFFER
 
-    private fun priceFor(side: Side, id: Long): Double {
+    private fun priceFor(
+        side: Side,
+        id: Long,
+    ): Double {
         val offset = (id % priceLevels).toInt()
         return if (side == Side.BID) 100.0 - offset else 100.0 + offset
     }

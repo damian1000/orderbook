@@ -1,9 +1,8 @@
 # Kotlin Order Book
 
 [![CI](https://github.com/damian1000/kotlin-orderbook/actions/workflows/ci.yml/badge.svg)](https://github.com/damian1000/kotlin-orderbook/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/damian1000/kotlin-orderbook/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian1000/kotlin-orderbook/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/damian1000/kotlin-orderbook/graph/badge.svg)](https://codecov.io/gh/damian1000/kotlin-orderbook)
-[![Kotlin](https://img.shields.io/badge/kotlin-2.3.21-blueviolet)](https://kotlinlang.org/)
-[![JDK](https://img.shields.io/badge/jdk-25-orange)](https://openjdk.org/projects/jdk/25/)
 
 A small, thread-safe **limit order book** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications.
 
