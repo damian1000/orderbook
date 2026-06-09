@@ -1,7 +1,8 @@
 package io.github.damian1000.orderbook.bench
 
-import io.github.damian1000.orderbook.Order
 import io.github.damian1000.orderbook.KotlinOrderBook
+import io.github.damian1000.orderbook.Order
+import io.github.damian1000.orderbook.Side
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Level
@@ -38,20 +39,20 @@ open class OrderBookBenchmark {
         val rng = Random(42)
         knownIds = LongArray(prepopulated)
         for (i in 0 until prepopulated) {
-            val side = if (i % 2 == 0) 'B' else 'O'
+            val side = if (i % 2 == 0) Side.BID else Side.OFFER
             val offset = rng.nextInt(priceLevels)
-            val price = if (side == 'B') 100.0 - offset else 100.0 + offset
+            val price = if (side == Side.BID) 100.0 - offset else 100.0 + offset
             val id = nextId.incrementAndGet()
             knownIds[i] = id
             book.addOrder(Order(id, price, side, 100L))
         }
     }
 
-    private fun nextSide(id: Long): Char = if (id and 1L == 0L) 'B' else 'O'
+    private fun nextSide(id: Long): Side = if (id and 1L == 0L) Side.BID else Side.OFFER
 
-    private fun priceFor(side: Char, id: Long): Double {
+    private fun priceFor(side: Side, id: Long): Double {
         val offset = (id % priceLevels).toInt()
-        return if (side == 'B') 100.0 - offset else 100.0 + offset
+        return if (side == Side.BID) 100.0 - offset else 100.0 + offset
     }
 
     @Benchmark
@@ -78,16 +79,16 @@ open class OrderBookBenchmark {
 
     @Benchmark
     fun getBestBid(bh: Blackhole) {
-        bh.consume(book.getPrice('B', 1))
+        bh.consume(book.getPrice(Side.BID, 1))
     }
 
     @Benchmark
     fun getBestOffer(bh: Blackhole) {
-        bh.consume(book.getPrice('O', 1))
+        bh.consume(book.getPrice(Side.OFFER, 1))
     }
 
     @Benchmark
     fun getTotalSizeLevel5(bh: Blackhole) {
-        bh.consume(book.getTotalSize('B', 5))
+        bh.consume(book.getTotalSize(Side.BID, 5))
     }
 }

@@ -18,7 +18,7 @@ Build an `OrderBook` that supports:
 5. **Get total size** for `(side, level)` — sum of sizes at that price level.
 6. **Get orders** for a side, ordered by level then time of arrival.
 
-Sides: `B` = bid (buy), `O` = offer (sell). Best bid = highest price; best offer = lowest price.
+Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as serialization codes via `Side.fromCode(...)`. Best bid = highest price; best offer = lowest price.
 
 ## Design
 
@@ -90,17 +90,25 @@ Tweak iterations/warmup in `build.gradle` under the `jmh { ... }` block.
 ```kotlin
 val book: OrderBook = KotlinOrderBook()
 
-book.addOrder(Order(id = 1L, price = 19.0, side = 'O', size = 8))
-book.addOrder(Order(id = 2L, price = 21.0, side = 'O', size = 16))
-book.addOrder(Order(id = 3L, price = 15.0, side = 'B', size = 5))
+book.addOrder(Order(id = 1L, price = 19.0, side = Side.OFFER, size = 8))
+book.addOrder(Order(id = 2L, price = 21.0, side = Side.OFFER, size = 16))
+book.addOrder(Order(id = 3L, price = 15.0, side = Side.BID,   size = 5))
 
-book.getPrice('O', 1)       // 19.0  — best offer
-book.getPrice('B', 1)       // 15.0  — best bid
-book.getTotalSize('O', 1)   // 8
+book.getPrice(Side.OFFER, 1)       // 19.0  — best offer
+book.getPrice(Side.BID,   1)       // 15.0  — best bid
+book.getPrice(Side.OFFER, 9)       // null  — fewer than 9 levels exist
+book.getTotalSize(Side.OFFER, 1)   // 8
 
 book.modifyOrder(orderId = 1L, size = 12)   // size 8 -> 12, time priority preserved
 book.removeOrder(orderId = 2L)
 ```
+
+Sides are an enum (`Side.BID` / `Side.OFFER`) — typos are a compile error,
+not a runtime exception. Invalid order data (non-positive size, `NaN` /
+infinite price, negative price) is rejected at `Order` construction, so a
+corrupt order can't reach the book. `getPrice` returns `Double?`: `null`
+means "fewer than `level` price levels on this side", which is a distinct
+state from a legitimate price of `0.0`.
 
 ## Stack
 

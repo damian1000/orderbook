@@ -21,6 +21,7 @@ class KotlinOrderBook : OrderBook {
     }
 
     override fun modifyOrder(orderId: Long, size: Long) {
+        require(size > 0) { "size must be positive, got $size" }
         lock.write {
             val order = ordersMap[orderId] ?: return
             val ordersAtPrice = ordersForSide(order.side)[order.price] ?: return
@@ -42,30 +43,33 @@ class KotlinOrderBook : OrderBook {
         }
     }
 
-    override fun getPrice(side: Char, level: Int): Double {
+    override fun getPrice(side: Side, level: Int): Double? {
+        requireValidLevel(level)
         return lock.read {
             getPrice(ordersForSide(side), level)
         }
     }
 
-    override fun getTotalSize(side: Char, level: Int): Long {
+    override fun getTotalSize(side: Side, level: Int): Long {
+        requireValidLevel(level)
         return lock.read {
             getTotalSize(ordersForSide(side), level)
         }
     }
 
-    override fun getOrders(side: Char): List<Order> {
+    override fun getOrders(side: Side): List<Order> {
         return lock.read {
             ordersForSide(side).values.flatMap { it.toList() }
         }
     }
 
-    private fun ordersForSide(side: Char): NavigableMap<Double, LinkedList<Order>> {
-        return when (side) {
-            'B' -> buyOrders
-            'O' -> sellOrders
-            else -> throw IllegalArgumentException("Unknown side $side")
-        }
+    private fun requireValidLevel(level: Int) {
+        require(level > 0) { "level must be positive, got $level" }
+    }
+
+    private fun ordersForSide(side: Side): NavigableMap<Double, LinkedList<Order>> = when (side) {
+        Side.BID -> buyOrders
+        Side.OFFER -> sellOrders
     }
 
     private fun removeOrderFromBook(order: Order) {
@@ -77,29 +81,23 @@ class KotlinOrderBook : OrderBook {
         }
     }
 
-    private fun getPrice(orders: NavigableMap<Double, LinkedList<Order>>, level: Int): Double {
-        if (level > 0 && level <= orders.size) {
-            if (level == 1) {
-                return orders.firstKey()
-            }
-            val orderItr = orders.keys.iterator()
-            for (i in 0 until level - 1) {
-                orderItr.next()
-            }
-            return orderItr.next()
+    private fun getPrice(orders: NavigableMap<Double, LinkedList<Order>>, level: Int): Double? {
+        if (level > orders.size) return null
+        if (level == 1) return orders.firstKey()
+        val orderItr = orders.keys.iterator()
+        for (i in 0 until level - 1) {
+            orderItr.next()
         }
-        return 0.0
+        return orderItr.next()
     }
 
     private fun getTotalSize(orders: NavigableMap<Double, LinkedList<Order>>, level: Int): Long {
-        if (level > 0 && level <= orders.size) {
-            val orderItr = orders.values.iterator()
-            for (i in 0 until level - 1) {
-                orderItr.next()
-            }
-            return orderItr.next().stream().mapToLong { obj: Order -> obj.size }.sum()
+        if (level > orders.size) return 0
+        val orderItr = orders.values.iterator()
+        for (i in 0 until level - 1) {
+            orderItr.next()
         }
-        return 0
+        return orderItr.next().sumOf { it.size }
     }
 
 }
