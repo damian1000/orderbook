@@ -3,7 +3,7 @@ plugins {
     id 'org.jetbrains.kotlin.jvm' version '2.4.0'
     id 'me.champeau.jmh' version '0.7.3'
     id 'jacoco'
-    id 'com.diffplug.spotless' version '7.0.4'
+    id 'com.diffplug.spotless' version '8.6.0'
     id 'org.owasp.dependencycheck' version '12.1.0'
 }
 
