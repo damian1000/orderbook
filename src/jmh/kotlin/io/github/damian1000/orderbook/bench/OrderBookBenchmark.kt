@@ -55,6 +55,9 @@ open class OrderBookBenchmark {
         return if (side == Side.BID) 100.0 - offset else 100.0 + offset
     }
 
+    // Non-stationary: book grows unboundedly inside each iteration's measurement window,
+    // so the reported average mixes operation cost at many different book sizes. Kept for
+    // diagnostic comparison only — use addThenRemove for the headline number.
     @Benchmark
     fun addOrder(bh: Blackhole) {
         val id = nextId.incrementAndGet()
