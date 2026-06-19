@@ -3,7 +3,7 @@ plugins {
     id 'org.jetbrains.kotlin.jvm' version '2.3.21' // pinned: CodeQL's Kotlin extractor caps at <2.3.30
     id 'me.champeau.jmh' version '0.7.3'
     id 'jacoco'
-    id 'com.diffplug.spotless' version '8.6.0'
+    id 'com.diffplug.spotless' version '8.7.0'
     id 'org.owasp.dependencycheck' version '12.2.2'
 }
 
