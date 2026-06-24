@@ -10,8 +10,8 @@ import kotlin.concurrent.write
 
 class KotlinOrderBook : OrderBook {
     private val lock = ReentrantReadWriteLock()
-    private val buyOrders: NavigableMap<Double, LinkedList<Order>> = TreeMap(Comparator.reverseOrder())
-    private val sellOrders: NavigableMap<Double, LinkedList<Order>> = TreeMap()
+    private val buyOrders: NavigableMap<Price, LinkedList<Order>> = TreeMap(Comparator.reverseOrder())
+    private val sellOrders: NavigableMap<Price, LinkedList<Order>> = TreeMap()
     private val ordersMap: MutableMap<Long, Order> = HashMap()
 
     override fun addOrder(order: Order) {
@@ -55,7 +55,7 @@ class KotlinOrderBook : OrderBook {
     override fun getPrice(
         side: Side,
         level: Int,
-    ): Double? {
+    ): Price? {
         requireValidLevel(level)
         return lock.read {
             getPrice(ordersForSide(side), level)
@@ -81,7 +81,7 @@ class KotlinOrderBook : OrderBook {
         require(level > 0) { "level must be positive, got $level" }
     }
 
-    private fun ordersForSide(side: Side): NavigableMap<Double, LinkedList<Order>> =
+    private fun ordersForSide(side: Side): NavigableMap<Price, LinkedList<Order>> =
         when (side) {
             Side.BID -> buyOrders
             Side.OFFER -> sellOrders
@@ -97,9 +97,9 @@ class KotlinOrderBook : OrderBook {
     }
 
     private fun getPrice(
-        orders: NavigableMap<Double, LinkedList<Order>>,
+        orders: NavigableMap<Price, LinkedList<Order>>,
         level: Int,
-    ): Double? {
+    ): Price? {
         if (level > orders.size) return null
         if (level == 1) return orders.firstKey()
         val orderItr = orders.keys.iterator()
@@ -110,7 +110,7 @@ class KotlinOrderBook : OrderBook {
     }
 
     private fun getTotalSize(
-        orders: NavigableMap<Double, LinkedList<Order>>,
+        orders: NavigableMap<Price, LinkedList<Order>>,
         level: Int,
     ): Long {
         if (level > orders.size) return 0

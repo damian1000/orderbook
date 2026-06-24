@@ -11,39 +11,37 @@ import org.junit.jupiter.api.Test
 class TestKotlinOrderBook {
     private lateinit var orderBook: OrderBook
 
-    companion object {
-        const val DETA = 0.00000001
-    }
+    private fun price(value: String): Price = Price.of(value)
 
     @BeforeEach
     fun setup() {
         orderBook = KotlinOrderBook()
-        orderBook.addOrder(Order(1L, 19.0, Side.OFFER, 8))
-        orderBook.addOrder(Order(2L, 19.0, Side.OFFER, 4))
-        orderBook.addOrder(Order(5L, 22.0, Side.OFFER, 7))
-        orderBook.addOrder(Order(3L, 21.0, Side.OFFER, 16))
-        orderBook.addOrder(Order(4L, 21.0, Side.OFFER, 1))
-        orderBook.addOrder(Order(6L, 15.0, Side.BID, 5))
+        orderBook.addOrder(Order(1L, price("19"), Side.OFFER, 8))
+        orderBook.addOrder(Order(2L, price("19"), Side.OFFER, 4))
+        orderBook.addOrder(Order(5L, price("22"), Side.OFFER, 7))
+        orderBook.addOrder(Order(3L, price("21"), Side.OFFER, 16))
+        orderBook.addOrder(Order(4L, price("21"), Side.OFFER, 1))
+        orderBook.addOrder(Order(6L, price("15"), Side.BID, 5))
         orderBook.modifyOrder(6L, 10)
-        orderBook.addOrder(Order(7L, 13.0, Side.BID, 20))
+        orderBook.addOrder(Order(7L, price("13"), Side.BID, 20))
         orderBook.removeOrder(7L)
-        orderBook.addOrder(Order(8L, 10.0, Side.BID, 13))
-        orderBook.addOrder(Order(9L, 10.0, Side.BID, 13))
+        orderBook.addOrder(Order(8L, price("10"), Side.BID, 13))
+        orderBook.addOrder(Order(9L, price("10"), Side.BID, 13))
     }
 
     @Test
     fun testGetPriceForOfferLevelOne() {
-        assertEquals(19.0, orderBook.getPrice(Side.OFFER, 1)!!, DETA)
+        assertEquals(price("19"), orderBook.getPrice(Side.OFFER, 1))
     }
 
     @Test
     fun testGetPriceForOfferLevelTwo() {
-        assertEquals(21.0, orderBook.getPrice(Side.OFFER, 2)!!, DETA)
+        assertEquals(price("21"), orderBook.getPrice(Side.OFFER, 2))
     }
 
     @Test
     fun testGetPriceForOfferLevelThree() {
-        assertEquals(22.0, orderBook.getPrice(Side.OFFER, 3)!!, DETA)
+        assertEquals(price("22"), orderBook.getPrice(Side.OFFER, 3))
     }
 
     @Test
@@ -53,12 +51,12 @@ class TestKotlinOrderBook {
 
     @Test
     fun testGetPriceForBidLevelOne() {
-        assertEquals(15.0, orderBook.getPrice(Side.BID, 1)!!, DETA)
+        assertEquals(price("15"), orderBook.getPrice(Side.BID, 1))
     }
 
     @Test
     fun testGetPriceForBidLevelTwo() {
-        assertEquals(10.0, orderBook.getPrice(Side.BID, 2)!!, DETA)
+        assertEquals(price("10"), orderBook.getPrice(Side.BID, 2))
     }
 
     @Test
@@ -128,22 +126,22 @@ class TestKotlinOrderBook {
 
     @Test
     fun testAddExistingIdRemovesOldOrder() {
-        orderBook.addOrder(Order(1L, 23.0, Side.OFFER, 11))
+        orderBook.addOrder(Order(1L, price("23"), Side.OFFER, 11))
 
         val offers = orderBook.getOrders(Side.OFFER)
         assertEquals(listOf(2L, 3L, 4L, 5L, 1L), offers.map { it.id })
         assertEquals(4L, orderBook.getTotalSize(Side.OFFER, 1))
-        assertEquals(23.0, orderBook.getPrice(Side.OFFER, 4)!!, DETA)
+        assertEquals(price("23"), orderBook.getPrice(Side.OFFER, 4))
         assertEquals(11L, orderBook.getTotalSize(Side.OFFER, 4))
     }
 
     @Test
     fun testAddExistingIdCanMoveSides() {
-        orderBook.addOrder(Order(1L, 16.0, Side.BID, 11))
+        orderBook.addOrder(Order(1L, price("16"), Side.BID, 11))
 
         assertEquals(listOf(2L, 3L, 4L, 5L), orderBook.getOrders(Side.OFFER).map { it.id })
         assertEquals(listOf(1L, 6L, 8L, 9L), orderBook.getOrders(Side.BID).map { it.id })
-        assertEquals(16.0, orderBook.getPrice(Side.BID, 1)!!, DETA)
+        assertEquals(price("16"), orderBook.getPrice(Side.BID, 1))
     }
 
     @Test
@@ -190,12 +188,8 @@ class TestKotlinOrderBook {
 
     @Test
     fun invalidOrderInputsAreRejected() {
-        assertThrows(IllegalArgumentException::class.java) { Order(100L, 1.0, Side.BID, 0) }
-        assertThrows(IllegalArgumentException::class.java) { Order(100L, 1.0, Side.BID, -1) }
-        assertThrows(IllegalArgumentException::class.java) { Order(100L, -0.01, Side.BID, 1) }
-        assertThrows(IllegalArgumentException::class.java) { Order(100L, Double.NaN, Side.BID, 1) }
-        assertThrows(IllegalArgumentException::class.java) { Order(100L, Double.POSITIVE_INFINITY, Side.BID, 1) }
-        assertThrows(IllegalArgumentException::class.java) { Order(100L, Double.NEGATIVE_INFINITY, Side.BID, 1) }
+        assertThrows(IllegalArgumentException::class.java) { Order(100L, price("1"), Side.BID, 0) }
+        assertThrows(IllegalArgumentException::class.java) { Order(100L, price("1"), Side.BID, -1) }
     }
 
     @Test

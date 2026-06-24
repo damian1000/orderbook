@@ -25,7 +25,7 @@ interface OrderBook {
     fun getPrice(
         side: Side,
         level: Int,
-    ): Double?
+    ): Price?
 
     /**
      * @return the sum of order sizes at `level` on `side`, or `0` when fewer

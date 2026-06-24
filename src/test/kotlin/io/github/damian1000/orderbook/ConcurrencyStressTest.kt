@@ -37,7 +37,7 @@ class ConcurrencyStressTest {
                 val idBase = t.toLong() * ordersPerThread
                 val side = if (t % 2 == 0) Side.BID else Side.OFFER
                 for (i in 0 until ordersPerThread) {
-                    val price = 100.0 + (i % 50)
+                    val price = Price.of((100 + (i % 50)).toString())
                     book.addOrder(Order(idBase + i, price, side, 1))
                 }
                 for (i in 0 until ordersPerThread) {
@@ -61,7 +61,7 @@ class ConcurrencyStressTest {
         val totalOrders = 2_000
         for (id in 0L until totalOrders) {
             val side = if (id % 2 == 0L) Side.BID else Side.OFFER
-            book.addOrder(Order(id, 100.0 + (id % 25), side, 10))
+            book.addOrder(Order(id, Price.of((100 + (id % 25)).toString()), side, 10))
         }
 
         val writerThreads = 4
@@ -84,7 +84,7 @@ class ConcurrencyStressTest {
                         when (rng.nextInt(3)) {
                             0 -> {
                                 val side = if (rng.nextBoolean()) Side.BID else Side.OFFER
-                                book.addOrder(Order(id, 100.0 + rng.nextInt(25), side, rng.nextLong(1, 50)))
+                                book.addOrder(Order(id, Price.of((100 + rng.nextInt(25)).toString()), side, rng.nextLong(1, 50)))
                             }
                             1 -> book.modifyOrder(id, rng.nextLong(1, 100))
                             2 -> book.removeOrder(id)
@@ -130,7 +130,7 @@ class ConcurrencyStressTest {
         val book = KotlinOrderBook()
         val totalOrders = 500
         for (id in 0L until totalOrders) {
-            book.addOrder(Order(id, 100.0, Side.BID, 10))
+            book.addOrder(Order(id, Price.of("100"), Side.BID, 10))
         }
         val originalIds = (0L until totalOrders).toSet()
 
@@ -173,7 +173,7 @@ class ConcurrencyStressTest {
                 startGate.await()
                 val idBase = t.toLong() * opsPerThread
                 for (i in 0 until opsPerThread) {
-                    book.addOrder(Order(idBase + i, 50.0, Side.BID, 1))
+                    book.addOrder(Order(idBase + i, Price.of("50"), Side.BID, 1))
                     book.removeOrder(idBase + i)
                 }
                 done.countDown()

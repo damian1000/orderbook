@@ -2,6 +2,7 @@ package io.github.damian1000.orderbook.bench
 
 import io.github.damian1000.orderbook.KotlinOrderBook
 import io.github.damian1000.orderbook.Order
+import io.github.damian1000.orderbook.Price
 import io.github.damian1000.orderbook.Side
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
@@ -40,10 +41,10 @@ open class OrderBookBenchmark {
         for (i in 0 until prepopulated) {
             val side = if (i % 2 == 0) Side.BID else Side.OFFER
             val offset = rng.nextInt(priceLevels)
-            val price = if (side == Side.BID) 100.0 - offset else 100.0 + offset
+            val whole = if (side == Side.BID) 100L - offset else 100L + offset
             val id = nextId.incrementAndGet()
             knownIds[i] = id
-            book.addOrder(Order(id, price, side, 100L))
+            book.addOrder(Order(id, Price(whole * UNIT), side, 100L))
         }
     }
 
@@ -52,9 +53,15 @@ open class OrderBookBenchmark {
     private fun priceFor(
         side: Side,
         id: Long,
-    ): Double {
-        val offset = (id % priceLevels).toInt()
-        return if (side == Side.BID) 100.0 - offset else 100.0 + offset
+    ): Price {
+        val offset = id % priceLevels
+        val whole = if (side == Side.BID) 100L - offset else 100L + offset
+        return Price(whole * UNIT)
+    }
+
+    companion object {
+        // 10^Price.SCALE — a whole price unit expressed in ticks.
+        private const val UNIT = 100_000_000L
     }
 
     // Non-stationary: book grows unboundedly inside each iteration's measurement window,
