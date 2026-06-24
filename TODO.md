@@ -5,5 +5,4 @@
 - Add a price-level object that stores total size incrementally so `getTotalSize` is O(level).
 - Add multi-threaded JMH benchmarks (read-heavy, write-heavy, mixed).
 - Add allocation/GC profiling via JFR or async-profiler with results pinned in the README.
-- Add a single-writer implementation alongside the lock-based one, benchmarked head-to-head.
 - Add Lincheck linearizability testing layered over the existing concurrency stress tests.

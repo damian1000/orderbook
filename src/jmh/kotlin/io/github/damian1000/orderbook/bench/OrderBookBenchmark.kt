@@ -2,8 +2,10 @@ package io.github.damian1000.orderbook.bench
 
 import io.github.damian1000.orderbook.KotlinOrderBook
 import io.github.damian1000.orderbook.Order
+import io.github.damian1000.orderbook.OrderBook
 import io.github.damian1000.orderbook.Price
 import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.SingleWriterOrderBook
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Level
@@ -13,6 +15,7 @@ import org.openjdk.jmh.annotations.Param
 import org.openjdk.jmh.annotations.Scope
 import org.openjdk.jmh.annotations.Setup
 import org.openjdk.jmh.annotations.State
+import org.openjdk.jmh.annotations.TearDown
 import org.openjdk.jmh.infra.Blackhole
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -28,13 +31,21 @@ open class OrderBookBenchmark {
     @Param("50")
     var priceLevels: Int = 0
 
-    private lateinit var book: KotlinOrderBook
+    @Param("lock", "single-writer")
+    var impl: String = ""
+
+    private lateinit var book: OrderBook
     private val nextId = AtomicLong()
     private lateinit var knownIds: LongArray
 
     @Setup(Level.Iteration)
     fun setup() {
-        book = KotlinOrderBook()
+        book =
+            when (impl) {
+                "lock" -> KotlinOrderBook()
+                "single-writer" -> SingleWriterOrderBook()
+                else -> error("unknown impl: $impl")
+            }
         nextId.set(0)
         val rng = Random(42)
         knownIds = LongArray(prepopulated)
@@ -46,6 +57,11 @@ open class OrderBookBenchmark {
             knownIds[i] = id
             book.addOrder(Order(id, Price(whole * UNIT), side, 100L))
         }
+    }
+
+    @TearDown(Level.Iteration)
+    fun tearDown() {
+        (book as? AutoCloseable)?.close()
     }
 
     private fun nextSide(id: Long): Side = if (id and 1L == 0L) Side.BID else Side.OFFER
