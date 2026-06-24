@@ -21,11 +21,13 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 
 ## Design
 
-- **`buyOrders`**: `TreeMap<Double, LinkedList<Order>>` with reverse natural ordering — highest bid first.
-- **`sellOrders`**: `TreeMap<Double, LinkedList<Order>>` with natural ordering — lowest offer first.
-- **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
-- Per-price queues are `LinkedList<Order>` so insertion order = time priority.
-- A `ReentrantReadWriteLock` guards the maps and price queues. Writes are atomic over the full book; reads can run concurrently with other reads.
+- **Prices are integer ticks.** `Price` is a `@JvmInline value class` over a scaled `Long` (`SCALE = 8` decimal places). Scaled integers keep prices exact — no binary floating-point drift, so two logically equal prices always share a map key — and make comparison a primitive `Long` op. `BigDecimal` is touched only when parsing or formatting a decimal string, never on the matching path.
+- **`PlainOrderBook`** holds the data structure and algorithms, with no concurrency control:
+  - **`buyOrders`**: `TreeMap<Price, LinkedList<Order>>`, reverse ordering — highest bid first.
+  - **`sellOrders`**: `TreeMap<Price, LinkedList<Order>>`, natural ordering — lowest offer first.
+  - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
+  - Per-price queues are `LinkedList<Order>` so insertion order = time priority.
+- **Two concurrency strategies wrap that core**, differing only in how they serialise access — `KotlinOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
 - **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail.
 - Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
@@ -44,57 +46,73 @@ The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking e
 
 ## Concurrency
 
-- Reads (`getPrice`, `getTotalSize`, `getOrders`) take a read lock and see a consistent snapshot for that individual call.
-- Writes (`addOrder`, `modifyOrder`, `removeOrder`) take a write lock, so id lookup and price-level queues stay consistent.
-- This is fine for the spec; a production engine would likely pin a single writer per side or use a more specialized transaction structure.
+Two interchangeable `OrderBook` implementations share the same `PlainOrderBook` core:
+
+- **`KotlinOrderBook` (lock-based, default).** Reads (`getPrice`, `getTotalSize`, `getOrders`) take a read lock and see a consistent snapshot for that call; writes (`addOrder`, `modifyOrder`, `removeOrder`) take the write lock. The read/write split lets reads run concurrently.
+- **`SingleWriterOrderBook`.** One owning thread runs every operation serially; callers hand work off and await the result, so no locks touch the data structures. This is the practical "lockless" design used by low-latency engines (the single-writer principle), rather than a lock-free `TreeMap`, which isn't achievable. It is `AutoCloseable` — `close()` stops the writer thread.
+
+The [benchmarks](#benchmarks) compare the two under contention.
 
 ## Run
 
 ```bash
-./gradlew test     # 26 unit tests + 4 concurrency stress tests, deterministic
-./gradlew jmh      # JMH micro-benchmarks (~8 min on JDK 25)
+./gradlew test     # behavioural contract run against both books + concurrency stress tests
+./gradlew jmh      # JMH micro-benchmarks (single-threaded + contended head-to-head)
 ```
 
 ## Benchmarks
 
-JMH 1.36, JDK 25.0.1, single-threaded, 3×10s warmup + 5×10s measurement, average time per op. Book pre-populated with 10,000 orders across 50 price levels.
+JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an 8-core development laptop. **Indicative, not publication-grade** — reproduce on your own hardware before drawing conclusions.
 
-| Operation | Avg time | 99.9% CI |
-|---|---:|---|
-| `getPrice` best bid, level 1 | **17 ns** | ±6 ns |
-| `getPrice` best offer, level 1 | **18 ns** | ±2 ns |
-| `getTotalSize` at level 5 | **342 ns** | ±214 ns |
-| `modifyOrder` (existing id, same price) | **322 ns** | ±201 ns |
-| `addOrder` + `removeOrder` pair | **401 ns** | ±54 ns |
+### Single-threaded, lock-based (average time per op)
+
+3×2s warmup + 5×2s measurement, single fork.
+
+| Operation | Avg time |
+|---|---:|
+| `getPrice` best bid, level 1 | **16 ns** |
+| `getPrice` best offer, level 1 | **18 ns** |
+| `getTotalSize` at level 5 | **312 ns** |
+| `modifyOrder` (existing id, same price) | **295 ns** |
+| `addOrder` + `removeOrder` pair | **493 ns** |
+
+- Best-price lookup is ~16 ns — `TreeMap.firstKey()` is O(1) with read-lock overhead included. Moving price from `Double` to a `Price(Long)` value class did not regress it.
+- The add/remove pair under ~500 ns is the honest steady-state number — book size is stationary across the window. (A standalone `addOrder` row is omitted: the book grows unboundedly inside the measurement window, so its average mixes many book sizes.)
+
+### Lock vs single-writer, contended (8 threads, throughput, higher is better)
+
+5×2s warmup + 8×2s measurement, 2 forks.
+
+| Workload | `KotlinOrderBook` (lock) | `SingleWriterOrderBook` |
+|---|---:|---:|
+| read-heavy (best bid + best offer) | **2719 ± 94** ops/ms | 250 ± 11 ops/ms |
+| mixed (~90% reads) | **1378 ± 1058** ops/ms | 447 ± 11 ops/ms |
+| write-heavy (add + remove) | **223 ± 135** ops/ms | 168 ± 27 ops/ms |
 
 Reading the table:
-- **Best-price lookup is ~17 ns** — `TreeMap.firstKey()` is O(1), with read-lock overhead included. The nullable `Double?` return introduced for unambiguous "no level" semantics did not measurably move the number.
-- **Steady-state add/remove pair under 500 ns** is the honest throughput number — book size is stationary across the measurement window.
-- **modify ≈ 320 ns** searches and replaces the existing list element in place, preserving FIFO priority.
-- Numbers are single-threaded by design — this is a correctness-first design, not a single-writer low-latency engine. A production matching engine would pin one writer per side and use intrusive linked lists for O(1) cancel.
+- **The read/write lock wins on throughput across the board** on this hardware. Its read lock lets queries run concurrently, so read-heavy and mixed workloads scale well past a design that serialises every read through one thread.
+- **But the lock's throughput is wildly variable under write contention** (±1058 on mixed, ±135 on write-heavy) while the single writer is rock-steady (±11–27). Predictable latency is what a matching engine actually cares about, so stability — not raw throughput — is the single-writer's selling point here.
+- **The naive single writer doesn't realise the theoretical win** because its hand-off still goes through a blocking queue and `Future.get()` (locks and thread parking) — it relocates locking rather than removing it, and adds cross-core wakeup latency. Turning the stability into a throughput win would need a Disruptor-style busy-spin ring buffer; that's the natural follow-up.
 
-**Why no standalone `addOrder` row.** The `addOrder` JMH benchmark exists in the source but is excluded from the headline numbers: book size grows unboundedly inside each iteration's 10-second measurement window, so any single average mixes operation cost at many different book sizes. Steady-state throughput is reported via the add/remove pair instead. A fixed-burst variant with `@OperationsPerInvocation` is on the TODO.
-
-Run on your own hardware:
+Reproduce:
 
 ```bash
-./gradlew jmh --no-configuration-cache
-cat build/reports/jmh/results.json   # full JSON output
+./gradlew jmhJar
+java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
+java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=lock -f 1
 ```
-
-The `--no-configuration-cache` flag is needed because the `me.champeau.jmh` plugin's `jmhJar` task is not yet config-cache-compatible. Tweak iterations/warmup in `build.gradle` under the `jmh { ... }` block.
 
 ## Use it
 
 ```kotlin
 val book: OrderBook = KotlinOrderBook()
 
-book.addOrder(Order(id = 1L, price = 19.0, side = Side.OFFER, size = 8))
-book.addOrder(Order(id = 2L, price = 21.0, side = Side.OFFER, size = 16))
-book.addOrder(Order(id = 3L, price = 15.0, side = Side.BID,   size = 5))
+book.addOrder(Order(id = 1L, price = Price.of("19"), side = Side.OFFER, size = 8))
+book.addOrder(Order(id = 2L, price = Price.of("21"), side = Side.OFFER, size = 16))
+book.addOrder(Order(id = 3L, price = Price.of("15"), side = Side.BID,   size = 5))
 
-book.getPrice(Side.OFFER, 1)       // 19.0  — best offer
-book.getPrice(Side.BID,   1)       // 15.0  — best bid
+book.getPrice(Side.OFFER, 1)       // 19.00000000  — best offer
+book.getPrice(Side.BID,   1)       // 15.00000000  — best bid
 book.getPrice(Side.OFFER, 9)       // null  — fewer than 9 levels exist
 book.getTotalSize(Side.OFFER, 1)   // 8
 
@@ -103,11 +121,12 @@ book.removeOrder(orderId = 2L)
 ```
 
 Sides are an enum (`Side.BID` / `Side.OFFER`) — typos are a compile error,
-not a runtime exception. Invalid order data (non-positive size, `NaN` /
-infinite price, negative price) is rejected at `Order` construction, so a
-corrupt order can't reach the book. `getPrice` returns `Double?`: `null`
-means "fewer than `level` price levels on this side", which is a distinct
-state from a legitimate price of `0.0`.
+not a runtime exception. Prices are exact integer ticks via `Price`, so
+`Price.of("3.45")` round-trips without floating-point drift; over-precise
+(beyond `SCALE` decimals) or negative prices are rejected at construction, and
+non-positive sizes are rejected at `Order` construction — a corrupt order can't
+reach the book. `getPrice` returns `Price?`: `null` means "fewer than `level`
+price levels on this side", distinct from a legitimate price of zero.
 
 ## Stack
 
@@ -115,7 +134,7 @@ state from a legitimate price of `0.0`.
 - Java 25 toolchain
 - JUnit Jupiter 6.1
 - Hamcrest 3
-- Gradle 9.5.1
+- Gradle 9.6.0
 
 No web framework, no DB, no other moving parts. Pure data-structure exercise.
 
