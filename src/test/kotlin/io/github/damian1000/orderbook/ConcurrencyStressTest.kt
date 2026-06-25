@@ -12,13 +12,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Multi-threaded correctness tests for `KotlinOrderBook`. These verify that
- * the `ReentrantReadWriteLock` discipline holds end-to-end — readers never
- * observe a torn book, writers don't drop orders, and the data structures
- * survive heavy contention without deadlocking.
+ * Multi-threaded stress tests for `KotlinOrderBook`. Under heavy contention
+ * they assert two properties: liveness (operations make progress and the
+ * structures never deadlock) and invariants (writers don't drop or duplicate
+ * orders, and the book stays internally consistent — no exceptions from a
+ * half-applied write). They do not prove linearizability — establishing that
+ * every operation appears to take effect atomically in some sequential order
+ * is the job of a dedicated model checker (e.g. Lincheck), not these tests.
  *
  * Throughput (operations/second) is the JMH benchmark's job; these tests are
- * about invariants, not performance.
+ * about correctness invariants, not performance.
  */
 class ConcurrencyStressTest {
     @Test

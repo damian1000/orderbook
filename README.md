@@ -28,7 +28,7 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
   - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
   - Per-price queues are `LinkedList<Order>` so insertion order = time priority.
 - **Two concurrency strategies wrap that core**, differing only in how they serialise access — `KotlinOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
-- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail.
+- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail. This is a deliberate simplification: real venues keep queue priority on a size *decrease* but send a size *increase* to the back of the queue. Here any size change retains its place.
 - Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
 ## Complexity
@@ -38,7 +38,7 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 | `addOrder` | **O(log P)** | `P` = distinct price levels on that side; replacing an existing id also removes its old queue entry |
 | `removeOrder` | **O(log P + N_p)** | id-lookup O(1); removing from the `LinkedList` is O(N) at that price level |
 | `modifyOrder` | **O(log P + N_p)** | finds and replaces the existing queue element in place |
-| `getPrice(side, level)` | **O(1)** for level 1, otherwise **O(level)** | uses `TreeMap.firstKey()` for best price; otherwise iterates keys until `level` |
+| `getPrice(side, level)` | **O(log P)** for level 1, otherwise **O(log P + level)** | `TreeMap.firstKey()` walks the tree to the leftmost node for the best price; higher levels iterate keys from there |
 | `getTotalSize(side, level)` | **O(level + N_p)** | sums the LinkedList at that level |
 | `getOrders(side)` | **O(P + N)** | walks all per-price queues |
 
@@ -76,7 +76,7 @@ JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an
 | `modifyOrder` (existing id, same price) | **295 ns** |
 | `addOrder` + `removeOrder` pair | **493 ns** |
 
-- Best-price lookup is ~16 ns — `TreeMap.firstKey()` is O(1) with read-lock overhead included. Moving price from `Double` to a `Price(Long)` value class did not regress it.
+- Best-price lookup is ~16 ns (read-lock overhead included). `TreeMap.firstKey()` is **O(log P)** — it walks the tree's left spine and the result isn't cached — but with ~50 price levels that's only a handful of pointer hops, so it measures effectively flat. Moving price from `Double` to a `Price(Long)` value class did not regress it.
 - The add/remove pair under ~500 ns is the honest steady-state number — book size is stationary across the window. (A standalone `addOrder` row is omitted: the book grows unboundedly inside the measurement window, so its average mixes many book sizes.)
 
 ### Lock vs single-writer, contended (8 threads, throughput, higher is better)
