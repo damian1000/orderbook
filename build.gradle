@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id 'application'
     id 'org.jetbrains.kotlin.jvm' version '2.3.21' // pinned: CodeQL's Kotlin extractor caps at <2.3.30
     id 'me.champeau.jmh' version '0.7.3'
     id 'jacoco'
@@ -22,6 +23,12 @@ kotlin {
     }
 }
 
+// The live demo (a tiny JDK-HttpServer wrapper around the book + matching engine).
+application {
+    applicationName = 'orderbook-demo'
+    mainClass = 'io.github.damian1000.orderbook.demo.DemoServerKt'
+}
+
 repositories {
     mavenCentral()
 }
@@ -40,8 +47,18 @@ test {
     finalizedBy jacocoTestReport
 }
 
+// The live-demo HTTP server (DemoServerKt + its view layer) is an application entry point whose
+// main() runs a server — excluded from coverage like a Spring Boot Application / CLI MainKt. The
+// matching engine and book it wraps are fully unit-tested.
+def coverageExclusions = ['**/demo/**']
+
 jacocoTestReport {
     dependsOn test
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, excludes: coverageExclusions)
+        }))
+    }
     reports {
         xml.required = true
         html.required = true
@@ -50,6 +67,11 @@ jacocoTestReport {
 
 jacocoTestCoverageVerification {
     dependsOn jacocoTestReport
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, excludes: coverageExclusions)
+        }))
+    }
     violationRules {
         rule {
             limit {

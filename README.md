@@ -4,7 +4,9 @@
 [![CodeQL](https://github.com/damian1000/kotlin-orderbook/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian1000/kotlin-orderbook/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/damian1000/kotlin-orderbook/graph/badge.svg)](https://codecov.io/gh/damian1000/kotlin-orderbook)
 
-A small, thread-safe **limit order book** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications.
+A small, thread-safe **limit order book** and **price-time-priority matching engine** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications — then submit crossing orders and watch them match.
+
+**▶ Live demo:** http://145.241.193.169:8080/ — submit an order and watch it match resting liquidity and print to the trade tape.
 
 ## Problem
 
@@ -53,11 +55,27 @@ Two interchangeable `OrderBook` implementations share the same `PlainOrderBook` 
 
 The [benchmarks](#benchmarks) compare the two under contention.
 
+## Matching engine
+
+`MatchingEngine` adds price-time-priority matching on top of any `OrderBook`. A submitted order crosses the best opposite levels first, filling the oldest resting order at each level before moving on; each match prints a `Trade` at the **resting** order's price (so price improvement accrues to the taker), and any unfilled remainder rests on the book as a passive limit order.
+
+It drives only the public `add` / `remove` / `modify` / query contract — never the book's internals — so the data structure stays a clean, independently-benchmarked component and either concurrency strategy can be matched on.
+
+```kotlin
+val engine = MatchingEngine(KotlinOrderBook())
+engine.submit(Order(1L, Price.of("101"), Side.OFFER, 5))        // rests: nothing to cross
+val fills = engine.submit(Order(2L, Price.of("101"), Side.BID, 8))
+// fills = [Trade(101.00, size 5, resting=1, incoming=2, BID)]; the remaining 3 rests as the best bid
+```
+
+Scope: plain limit orders (cross, then rest the remainder). Richer types — market, IOC/FOK, stop, iceberg — build on this. The [live demo](#kotlin-order-book) wraps the engine in a dependency-free JDK `HttpServer` with a one-page UI.
+
 ## Run
 
 ```bash
 ./gradlew test     # behavioural contract run against both books + concurrency stress tests
 ./gradlew jmh      # JMH micro-benchmarks (single-threaded + contended head-to-head)
+./gradlew run      # the live order-book + matching demo on http://localhost:8080
 ```
 
 ## Benchmarks
@@ -136,7 +154,7 @@ price levels on this side", distinct from a legitimate price of zero.
 - Hamcrest 3
 - Gradle 9.6.0
 
-No web framework, no DB, no other moving parts. Pure data-structure exercise.
+The core is a pure data-structure-and-algorithms exercise; a thin JDK-`HttpServer` demo (no web framework, no DB) wraps the matching engine for the live demo above.
 
 ## License
 
