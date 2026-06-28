@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kotlin Order Book</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">&#9670;</span> KOTLIN ORDER BOOK
+        <span class="eyebrow">price-time priority matching engine</span>
+      </div>
+      <div class="status">
+        <span id="conn" class="dot"></span><span id="connlbl">connecting</span>
+      </div>
+    </header>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="k">Last</span><span class="v" id="st-last">&mdash;</span>
+      </div>
+      <div class="stat">
+        <span class="k">Mid</span><span class="v" id="st-mid">&mdash;</span>
+      </div>
+      <div class="stat">
+        <span class="k">Spread</span
+        ><span class="v" id="st-spread">&mdash;</span>
+      </div>
+      <div class="stat">
+        <span class="k">Best Bid</span
+        ><span class="v pos" id="st-bid">&mdash;</span>
+      </div>
+      <div class="stat">
+        <span class="k">Best Ask</span
+        ><span class="v neg" id="st-ask">&mdash;</span>
+      </div>
+    </div>
+
+    <main class="grid">
+      <section class="panel book">
+        <div class="phead">
+          Order Book <span class="sub">cumulative depth</span>
+        </div>
+        <div class="ladder-head">
+          <span>Price</span><span>Size</span><span>Total</span>
+        </div>
+        <div id="asks" class="ladder asks"></div>
+        <div class="spread-row">
+          <span class="mid" id="sp-mid">&mdash;</span>
+          <span class="lbl">spread</span>
+          <span id="sp-spread">&mdash;</span>
+        </div>
+        <div id="bids" class="ladder bids"></div>
+      </section>
+
+      <aside class="side">
+        <section class="panel ticket">
+          <div class="phead">New Order</div>
+          <div class="seg">
+            <button id="buy" class="seg-btn buy active" type="button">
+              Buy
+            </button>
+            <button id="sell" class="seg-btn sell" type="button">Sell</button>
+          </div>
+          <label
+            >Limit Price<input
+              id="price"
+              value="101.00"
+              inputmode="decimal"
+              autocomplete="off"
+          /></label>
+          <label
+            >Size<input
+              id="size"
+              value="10"
+              inputmode="numeric"
+              autocomplete="off"
+          /></label>
+          <button id="submit" class="submit buy" type="button">
+            Buy 10 @ 101.00
+          </button>
+          <div id="result" class="result"></div>
+        </section>
+
+        <section class="panel tape">
+          <div class="phead">Trade Tape</div>
+          <div class="tape-head">
+            <span>Time</span><span>Side</span><span>Price</span
+            ><span>Size</span>
+          </div>
+          <div id="tape" class="tape-body"></div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span class="sb-item"
+        ><span id="conn2" class="dot"></span
+        ><span id="connlbl2">connecting</span></span
+      >
+      <span class="sb-item">updated <span id="age">&mdash;</span></span>
+      <span class="sb-item">events <span id="msgs">0</span></span>
+      <span class="grow"></span>
+      <span class="sb-item">SSE push &middot; single-writer book</span>
+      <span class="sb-item">
+        <a
+          href="https://github.com/damian1000/kotlin-orderbook"
+          target="_blank"
+          rel="noopener"
+        >
+          github.com/damian1000/kotlin-orderbook
+        </a>
+      </span>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

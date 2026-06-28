@@ -6,7 +6,7 @@
 
 A small, thread-safe **limit order book** and **price-time-priority matching engine** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications — then submit crossing orders and watch them match.
 
-**▶ Live demo:** https://orderbook.damianhoward.com — submit an order and watch it match resting liquidity and print to the trade tape.
+**▶ Try it live:** https://orderbook.damianhoward.com — submit an order and watch it match resting liquidity and print to the trade tape.
 
 ## Problem
 
@@ -30,19 +30,19 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
   - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
   - Per-price queues are `LinkedList<Order>` so insertion order = time priority.
 - **Two concurrency strategies wrap that core**, differing only in how they serialise access — `KotlinOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
-- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail. This is a deliberate simplification: real venues keep queue priority on a size *decrease* but send a size *increase* to the back of the queue. Here any size change retains its place.
+- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail. This is a deliberate simplification: real venues keep queue priority on a size _decrease_ but send a size _increase_ to the back of the queue. Here any size change retains its place.
 - Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
 ## Complexity
 
-| Operation | Cost | Notes |
-|---|---|---|
-| `addOrder` | **O(log P)** | `P` = distinct price levels on that side; replacing an existing id also removes its old queue entry |
-| `removeOrder` | **O(log P + N_p)** | id-lookup O(1); removing from the `LinkedList` is O(N) at that price level |
-| `modifyOrder` | **O(log P + N_p)** | finds and replaces the existing queue element in place |
-| `getPrice(side, level)` | **O(log P)** for level 1, otherwise **O(log P + level)** | `TreeMap.firstKey()` walks the tree to the leftmost node for the best price; higher levels iterate keys from there |
-| `getTotalSize(side, level)` | **O(level + N_p)** | sums the LinkedList at that level |
-| `getOrders(side)` | **O(P + N)** | walks all per-price queues |
+| Operation                   | Cost                                                     | Notes                                                                                                              |
+| --------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `addOrder`                  | **O(log P)**                                             | `P` = distinct price levels on that side; replacing an existing id also removes its old queue entry                |
+| `removeOrder`               | **O(log P + N_p)**                                       | id-lookup O(1); removing from the `LinkedList` is O(N) at that price level                                         |
+| `modifyOrder`               | **O(log P + N_p)**                                       | finds and replaces the existing queue element in place                                                             |
+| `getPrice(side, level)`     | **O(log P)** for level 1, otherwise **O(log P + level)** | `TreeMap.firstKey()` walks the tree to the leftmost node for the best price; higher levels iterate keys from there |
+| `getTotalSize(side, level)` | **O(level + N_p)**                                       | sums the LinkedList at that level                                                                                  |
+| `getOrders(side)`           | **O(P + N)**                                             | walks all per-price queues                                                                                         |
 
 The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking each order's node in its `LinkedList` (or replacing with an indexed map). Trade-off is more bookkeeping for a rarely-hot path.
 
@@ -68,14 +68,14 @@ val fills = engine.submit(Order(2L, Price.of("101"), Side.BID, 8))
 // fills = [Trade(101.00, size 5, resting=1, incoming=2, BID)]; the remaining 3 rests as the best bid
 ```
 
-Scope: plain limit orders (cross, then rest the remainder). Richer types — market, IOC/FOK, stop, iceberg — build on this. The [live demo](#kotlin-order-book) wraps the engine in a dependency-free JDK `HttpServer` with a one-page UI.
+Scope: plain limit orders (cross, then rest the remainder). Richer types — market, IOC/FOK, stop, iceberg — build on this. The [live web front end](#kotlin-order-book) wraps the engine in a dependency-free JDK `HttpServer`, pushing book and tape updates to the browser over Server-Sent Events.
 
 ## Run
 
 ```bash
 ./gradlew test     # behavioural contract run against both books + concurrency stress tests
 ./gradlew jmh      # JMH micro-benchmarks (single-threaded + contended head-to-head)
-./gradlew run      # the live order-book + matching demo on http://localhost:8080
+./gradlew run      # the live order-book + matching web app on http://localhost:8080
 ```
 
 ## Benchmarks
@@ -86,13 +86,13 @@ JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an
 
 3×2s warmup + 5×2s measurement, single fork.
 
-| Operation | Avg time |
-|---|---:|
-| `getPrice` best bid, level 1 | **16 ns** |
-| `getPrice` best offer, level 1 | **18 ns** |
-| `getTotalSize` at level 5 | **312 ns** |
+| Operation                               |   Avg time |
+| --------------------------------------- | ---------: |
+| `getPrice` best bid, level 1            |  **16 ns** |
+| `getPrice` best offer, level 1          |  **18 ns** |
+| `getTotalSize` at level 5               | **312 ns** |
 | `modifyOrder` (existing id, same price) | **295 ns** |
-| `addOrder` + `removeOrder` pair | **493 ns** |
+| `addOrder` + `removeOrder` pair         | **493 ns** |
 
 - Best-price lookup is ~16 ns (read-lock overhead included). `TreeMap.firstKey()` is **O(log P)** — it walks the tree's left spine and the result isn't cached — but with ~50 price levels that's only a handful of pointer hops, so it measures effectively flat. Moving price from `Double` to a `Price(Long)` value class did not regress it.
 - The add/remove pair under ~500 ns is the honest steady-state number — book size is stationary across the window. (A standalone `addOrder` row is omitted: the book grows unboundedly inside the measurement window, so its average mixes many book sizes.)
@@ -101,13 +101,14 @@ JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an
 
 5×2s warmup + 8×2s measurement, 2 forks.
 
-| Workload | `KotlinOrderBook` (lock) | `SingleWriterOrderBook` |
-|---|---:|---:|
-| read-heavy (best bid + best offer) | **2719 ± 94** ops/ms | 250 ± 11 ops/ms |
-| mixed (~90% reads) | **1378 ± 1058** ops/ms | 447 ± 11 ops/ms |
-| write-heavy (add + remove) | **223 ± 135** ops/ms | 168 ± 27 ops/ms |
+| Workload                           | `KotlinOrderBook` (lock) | `SingleWriterOrderBook` |
+| ---------------------------------- | -----------------------: | ----------------------: |
+| read-heavy (best bid + best offer) |     **2719 ± 94** ops/ms |         250 ± 11 ops/ms |
+| mixed (~90% reads)                 |   **1378 ± 1058** ops/ms |         447 ± 11 ops/ms |
+| write-heavy (add + remove)         |     **223 ± 135** ops/ms |         168 ± 27 ops/ms |
 
 Reading the table:
+
 - **The read/write lock wins on throughput across the board** on this hardware. Its read lock lets queries run concurrently, so read-heavy and mixed workloads scale well past a design that serialises every read through one thread.
 - **But the lock's throughput is wildly variable under write contention** (±1058 on mixed, ±135 on write-heavy) while the single writer is rock-steady (±11–27). Predictable latency is what a matching engine actually cares about, so stability — not raw throughput — is the single-writer's selling point here.
 - **The naive single writer doesn't realise the theoretical win** because its hand-off still goes through a blocking queue and `Future.get()` (locks and thread parking) — it relocates locking rather than removing it, and adds cross-core wakeup latency. Turning the stability into a throughput win would need a Disruptor-style busy-spin ring buffer; that's the natural follow-up.

@@ -23,10 +23,10 @@ kotlin {
     }
 }
 
-// The live demo (a tiny JDK-HttpServer wrapper around the book + matching engine).
+// The web front end (a tiny JDK-HttpServer wrapper around the book + matching engine).
 application {
-    applicationName = 'orderbook-demo'
-    mainClass = 'io.github.damian1000.orderbook.demo.DemoServerKt'
+    applicationName = 'orderbook'
+    mainClass = 'io.github.damian1000.orderbook.web.WebServerKt'
 }
 
 repositories {
@@ -47,10 +47,11 @@ test {
     finalizedBy jacocoTestReport
 }
 
-// The live-demo HTTP server (DemoServerKt + its view layer) is an application entry point whose
-// main() runs a server — excluded from coverage like a Spring Boot Application / CLI MainKt. The
-// matching engine and book it wraps are fully unit-tested.
-def coverageExclusions = ['**/demo/**']
+// The web transport (WebServer's main() runs an HttpServer) is an application entry point, excluded
+// from coverage like a Spring Boot Application / CLI MainKt. Its logic is deliberately kept thin:
+// the render-ready projection + JSON live in the io.github.damian1000.orderbook.view package, which
+// is fully unit-tested and NOT excluded. The matching engine and book are likewise fully tested.
+def coverageExclusions = ['**/web/**']
 
 jacocoTestReport {
     dependsOn test
@@ -93,6 +94,21 @@ spotless {
     kotlinGradle {
         target '*.gradle.kts'
         ktlint('1.5.0')
+    }
+    // Front-end assets are held to the same bar as the Kotlin: Prettier formats and the CI
+    // spotlessCheck fails the build on any drift. Needs Node on PATH (present on CI runners).
+    format 'web', {
+        target 'src/main/resources/web/**/*.html', 'src/main/resources/web/**/*.css', 'src/main/resources/web/**/*.js'
+        prettier('3.4.2')
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    // YAML CI/devops config and Markdown docs — keep them consistently formatted too.
+    format 'config', {
+        target '.github/**/*.yml', '.github/**/*.yaml', '*.md'
+        prettier('3.4.2')
+        trimTrailingWhitespace()
+        endWithNewline()
     }
 }
 
