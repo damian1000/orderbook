@@ -6,6 +6,9 @@ import io.github.damian1000.orderbook.model.Side
 // 10^Price.SCALE — a whole price unit expressed in ticks.
 internal const val UNIT = 100_000_000L
 
+// Every resting order is the same size, so a same-size aggressor fills exactly one at the top.
+internal const val RESTING_SIZE = 100L
+
 /** Deterministic side from an id, so a run is reproducible. */
 internal fun nextSide(id: Long): Side = if (id and 1L == 0L) Side.BID else Side.OFFER
 

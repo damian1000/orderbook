@@ -116,8 +116,11 @@ jmh {
     fork = 1
     warmupIterations = 3
     iterations = 5
+    // Per-class @BenchmarkMode wins (SampleTime for the submit() tail, Throughput for the contended
+    // run); this is only the default for any benchmark that doesn't set its own.
     benchmarkMode = ['avgt']
     timeUnit = 'us'
+    profilers = ['gc'] // allocations/op (gc.alloc.rate.norm) + GC pause stats on every benchmark
     resultFormat = 'JSON'
     resultsFile = project.file("${buildDir}/reports/jmh/results.json")
 }
