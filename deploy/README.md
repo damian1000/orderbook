@@ -1,6 +1,6 @@
 # Deployment
 
-The live demo at **https://orderbook.damianhoward.com** is deployed automatically on
+The live order book at **https://orderbook.damianhoward.com** is deployed automatically on
 every merge to `main` by [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml).
 
 ## Pipeline

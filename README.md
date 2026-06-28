@@ -155,7 +155,7 @@ price levels on this side", distinct from a legitimate price of zero.
 - Hamcrest 3
 - Gradle 9.6.0
 
-The core is a pure data-structure-and-algorithms exercise; a thin JDK-`HttpServer` demo (no web framework, no DB) wraps the matching engine for the live demo above.
+The core is a pure data-structure-and-algorithms exercise; a thin JDK-`HttpServer` front end (no web framework, no DB) wraps the matching engine for the live order book above.
 
 ## License
 

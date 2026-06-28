@@ -1,5 +1,5 @@
 [Unit]
-Description=Order book matching engine and live demo
+Description=Order book matching engine and web front end
 After=network.target
 
 [Service]
