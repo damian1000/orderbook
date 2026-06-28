@@ -3,7 +3,7 @@ package io.github.damian1000.orderbook.market
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 
-/** A single resting order used to seed — and replenish — a side of the book. */
+/** A resting order used to seed/replenish a side of the book. */
 data class SeedOrder(
     val price: Price,
     val side: Side,
@@ -11,11 +11,8 @@ data class SeedOrder(
 )
 
 /**
- * The resting liquidity a [MarketSession] opens with, and tops a side up from when a taker sweeps it
- * clean so a shared public book never appears empty.
- *
- * It is an explicit, injected value — not data hard-coded inside the session — so the session has no
- * opinion on what liquidity to show, and a test (or a different deployment) can supply its own.
+ * The resting liquidity a [MarketSession] opens with and tops a swept side up from, so the shared
+ * book never looks empty. An explicit injected value, not data baked into the session.
  */
 data class SeedLiquidity(
     val orders: List<SeedOrder>,
@@ -23,7 +20,6 @@ data class SeedLiquidity(
     fun forSide(side: Side): List<SeedOrder> = orders.filter { it.side == side }
 
     companion object {
-        /** The two-sided ladder around 100 the live site opens with. */
         fun default(): SeedLiquidity =
             SeedLiquidity(
                 listOf(

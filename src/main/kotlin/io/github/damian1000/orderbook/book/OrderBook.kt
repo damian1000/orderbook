@@ -5,41 +5,28 @@ import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 
 interface OrderBook {
-    /**
-     * Adds `order` to the book. If an order with the same `id` already exists,
-     * it is removed first and `order` takes its place (last-write-wins).
-     */
+    /** Adds the order; a duplicate `id` is replaced (last-write-wins). */
     fun addOrder(order: Order)
 
-    /** @return `true` if an order with `orderId` existed and was removed. */
     fun removeOrder(orderId: Long): Boolean
 
-    /** @return `true` if an order with `orderId` existed and was modified. */
     fun modifyOrder(
         orderId: Long,
         size: Long,
     ): Boolean
 
-    /**
-     * @return the price at `level` on `side`, or `null` when fewer than
-     *         `level` price levels exist on that side. `level=1` is the best
-     *         price on that side.
-     * @throws IllegalArgumentException if `level <= 0`.
-     */
+    /** Price at `level` (1 = best) on `side`, or null if that level doesn't exist. `level <= 0` throws. */
     fun getPrice(
         side: Side,
         level: Int,
     ): Price?
 
-    /**
-     * @return the sum of order sizes at `level` on `side`, or `0` when fewer
-     *         than `level` price levels exist on that side.
-     * @throws IllegalArgumentException if `level <= 0`.
-     */
+    /** Summed size at `level` (1 = best) on `side`, or 0 if that level doesn't exist. `level <= 0` throws. */
     fun getTotalSize(
         side: Side,
         level: Int,
     ): Long
 
+    /** Resting orders on `side`, best price first then time order. */
     fun getOrders(side: Side): List<Order>
 }

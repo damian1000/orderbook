@@ -8,21 +8,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-/**
- * Pushes live state to connected browsers.
- *
- * Names the push capability independently of the wire mechanism: [SseBroadcaster] implements it over
- * Server-Sent Events; a WebSocket implementation would satisfy the same contract, leaving [WebServer]
- * unchanged.
- */
+/** Pushes live state to browsers. SSE today ([SseBroadcaster]); a WebSocket impl would satisfy it unchanged. */
 interface Broadcaster {
-    /** Starts the periodic keep-alive. Call once, after the server is up. */
     fun startHeartbeat(periodSeconds: Long = 15)
 
-    /** Pushes a state update (JSON) to every connected client. */
     fun broadcast(json: String)
 
-    /** Serves one client connection: emits [initialJson], then forwards updates until it disconnects. */
     fun stream(
         exchange: HttpExchange,
         initialJson: String,
@@ -30,11 +21,8 @@ interface Broadcaster {
 }
 
 /**
- * Server-Sent Events fan-out.
- *
- * Holds the connected browsers and pushes each a copy of every broadcast through its own queue, so a
- * slow client can't block the others. A periodic heartbeat keeps connections alive through proxies
- * and lets a write to a departed client fail, reaping it.
+ * SSE fan-out: each client drains its own queue so a slow one can't block the others; a heartbeat
+ * keeps connections alive through proxies and reaps any client whose write has started failing.
  */
 class SseBroadcaster :
     Broadcaster,
@@ -69,7 +57,7 @@ class SseBroadcaster :
                 write(out, client.queue.take())
             }
         } catch (_: Exception) {
-            // Client went away or the server is shutting down — fall through to cleanup.
+            // Client gone or server shutting down — fall through to cleanup.
         } finally {
             clients.remove(client)
             runCatching { exchange.close() }

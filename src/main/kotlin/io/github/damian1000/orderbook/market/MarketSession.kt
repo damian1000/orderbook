@@ -11,41 +11,29 @@ import io.github.damian1000.orderbook.view.TapeEntry
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
-/** The result of submitting an order: how many resting orders it filled, and the resulting book. */
+/** Fills produced by an order, plus the resulting book. */
 data class SubmitOutcome(
     val matched: Int,
     val snapshot: MarketSnapshot,
 )
 
-/**
- * A live market that accepts orders and exposes the current book.
- *
- * The seam between the application layer and the transport ([io.github.damian1000.orderbook.web]):
- * the web layer depends on this interface, not on a concrete session, so it can be driven by a fake
- * in tests and the implementation can change without touching the transport.
- */
+/** A live market: accept orders, expose the book. The seam the web layer depends on, not the impl. */
 interface Market {
-    /** Submits a limit order and returns the fills plus the resulting snapshot. */
     fun submit(
         side: Side,
         price: Price,
         size: Long,
     ): SubmitOutcome
 
-    /** The current state of the book and recent tape. */
     fun snapshot(): MarketSnapshot
 }
 
 /**
- * The default [Market]: a live, shared trading session over a [PlainOrderBook] driven by a
- * [MatchingEngine].
+ * The default [Market]: a shared session over a [PlainOrderBook] + [MatchingEngine].
  *
- * The book is not thread-safe, so every read and mutation is serialised onto one owning thread — the
- * single-writer principle — which makes the session safe to share across many concurrent callers
- * with no locks in the data structure itself. It keeps a bounded trade tape and, after each order,
- * replenishes any side swept clean from the injected [SeedLiquidity].
- *
- * It holds no transport concern (HTTP, SSE, JSON), so it is unit-tested directly.
+ * The book isn't thread-safe, so every read and mutation runs on one owning thread (single-writer),
+ * making it safe to share without locks. Keeps a bounded tape and replenishes a swept side so the
+ * shared book never looks empty.
  */
 class MarketSession(
     private val seed: SeedLiquidity = SeedLiquidity.default(),
@@ -63,7 +51,6 @@ class MarketSession(
         onWriter { place(seed.orders) }
     }
 
-    /** Submits a limit order, returning the fills it generated and the resulting [MarketSnapshot]. */
     override fun submit(
         side: Side,
         price: Price,
@@ -80,7 +67,6 @@ class MarketSession(
             SubmitOutcome(trades.size, snapshotAt(now))
         }
 
-    /** The current state of the book and tape. */
     override fun snapshot(): MarketSnapshot = onWriter { snapshotAt(clock()) }
 
     override fun close() {

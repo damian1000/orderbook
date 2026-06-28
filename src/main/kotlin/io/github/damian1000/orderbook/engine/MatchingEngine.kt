@@ -6,54 +6,27 @@ import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import io.github.damian1000.orderbook.model.Trade
 
-/**
- * A matching strategy: takes an incoming order, crosses it against resting liquidity, and returns
- * the resulting fills (any unfilled remainder rests on the book).
- *
- * The interface names the capability independently of the rule used. [MatchingEngine] implements
- * price-time priority; richer strategies (pro-rata, etc.) would be alternative implementations the
- * rest of the system consumes through this same contract.
- */
+/** A matching strategy: crosses an incoming order against resting liquidity and returns the fills. */
 interface Matcher {
     fun submit(order: Order): List<Trade>
 }
 
 /**
- * Price-time-priority matching on top of an [OrderBook].
- *
- * A [submit]ted order crosses the best opposite price levels first, and within a
- * level fills the oldest resting order before moving on (time priority). Each match
- * prints a [Trade] at the resting order's price. Any quantity the order can't fill
- * against crossable liquidity rests on the book as a passive limit order.
- *
- * The matching loop never reaches into the book's internals — it drives the same
- * `add` / `remove` / `modify` / query contract every [OrderBook] exposes — so the
- * data structure stays a clean, independently-benchmarked component and any book
- * implementation (lock-based or single-writer) can be matched on.
- *
- * Not thread-safe: like [PlainOrderBook], callers serialise access.
- *
- * Scope: this matches plain limit orders (cross, then rest the remainder). Richer
- * order types — market, IOC/FOK, stop, iceberg — build on this and are tracked
- * separately. The repeated best-order lookup is `O(orders)` per fill via the public
- * contract; the `O(log P)` book-peek path is a deliberate later optimisation.
+ * Price-time priority over any [OrderBook]: an order crosses the best opposite levels first,
+ * oldest-first within a level, printing each [Trade] at the resting price (so price improvement
+ * accrues to the taker); the unfilled remainder rests. Drives only the public book contract, never
+ * its internals, so the data structure stays an independently benchmarkable component. Not thread-safe.
  */
 class MatchingEngine(
     private val book: OrderBook,
 ) : Matcher {
-    /**
-     * Matches [order] against the book, returning the [Trade]s it generated (in
-     * execution order). Any unfilled remainder is added to the book as a resting
-     * limit order on [order]'s own side.
-     */
     override fun submit(order: Order): List<Trade> {
         val trades = mutableListOf<Trade>()
         var remaining = order.size
         val opposite = order.side.opposite()
 
         while (remaining > 0) {
-            // getOrders flattens best-price-first then time-first, so the head is the
-            // oldest resting order at the best opposite level.
+            // getOrders is best-price-first then time-first, so the head is the order to fill next.
             val best = book.getOrders(opposite).firstOrNull() ?: break
             if (!crosses(order.side, order.price, best.price)) break
 
@@ -74,10 +47,6 @@ class MatchingEngine(
         return trades
     }
 
-    /**
-     * @return true if an incoming order on [incomingSide] priced at [incomingPrice]
-     *         crosses a resting order priced at [restingPrice].
-     */
     private fun crosses(
         incomingSide: Side,
         incomingPrice: Price,

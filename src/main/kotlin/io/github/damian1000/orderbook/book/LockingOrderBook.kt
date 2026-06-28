@@ -8,13 +8,8 @@ import kotlin.concurrent.read
 import kotlin.concurrent.write
 
 /**
- * Lock-based order book: guards a [PlainOrderBook] with a
- * [ReentrantReadWriteLock]. Mutations take the write lock; queries take the read
- * lock, so reads can proceed concurrently with each other.
- *
- * This is the baseline for the JMH head-to-head against [SingleWriterOrderBook].
- * Note the workload is write-heavy — only the three query methods read — so the
- * read/write split buys little over a plain lock here.
+ * Lock-based book: guards a [PlainOrderBook] with a read/write lock (reads concurrent, writes
+ * exclusive). The JMH baseline against [SingleWriterOrderBook].
  */
 class LockingOrderBook(
     private val delegate: PlainOrderBook = PlainOrderBook(),

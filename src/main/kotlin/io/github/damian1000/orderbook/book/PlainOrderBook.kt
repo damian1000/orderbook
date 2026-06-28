@@ -9,12 +9,9 @@ import java.util.NavigableMap
 import java.util.TreeMap
 
 /**
- * The order-book data structure and algorithms with no concurrency control.
- *
- * Not thread-safe on its own — callers must serialise access. [LockingOrderBook]
- * wraps it in a read/write lock; [SingleWriterOrderBook] confines it to a single
- * thread. Keeping the logic here means those two differ only in *how* they
- * synchronise, which is exactly what the JMH head-to-head is meant to isolate.
+ * The order-book data structure and algorithms, with no concurrency control — callers serialise
+ * access. [LockingOrderBook] and [SingleWriterOrderBook] wrap it, so they differ only in how they
+ * synchronise (what the JMH head-to-head isolates).
  */
 class PlainOrderBook : OrderBook {
     private val buyOrders: NavigableMap<Price, LinkedList<Order>> = TreeMap(Comparator.reverseOrder())

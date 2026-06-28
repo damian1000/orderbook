@@ -2,12 +2,7 @@ package io.github.damian1000.orderbook.web
 
 import java.nio.charset.StandardCharsets
 
-/**
- * The static front end (index.html, app.css, app.js), read once from the classpath at startup.
- *
- * The page itself lives under `src/main/resources/web` — proper HTML/CSS/JS files, formatted and
- * linted in CI — rather than embedded in Kotlin string literals.
- */
+/** The static front end (`src/main/resources/web`), read once from the classpath at startup. */
 class WebAssets private constructor(
     val indexHtml: String,
     val appCss: String,

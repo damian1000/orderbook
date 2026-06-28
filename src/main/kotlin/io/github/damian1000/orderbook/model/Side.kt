@@ -1,13 +1,8 @@
 package io.github.damian1000.orderbook.model
 
 /**
- * The two sides of an order book.
- *
- *  - [BID]   — buy order. Best bid is the highest price.
- *  - [OFFER] — sell order. Best offer is the lowest price.
- *
- * The single-char [code] (`B` / `O`) is kept for external serialization
- * compatibility — internal APIs work with the enum directly.
+ * The two sides: [BID] (buy; best = highest price) and [OFFER] (sell; best = lowest). The [code]
+ * char is retained for external serialization.
  */
 enum class Side(
     val code: Char,

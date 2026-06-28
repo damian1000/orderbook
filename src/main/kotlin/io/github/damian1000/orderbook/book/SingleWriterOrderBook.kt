@@ -9,21 +9,9 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Single-writer order book: a private [PlainOrderBook] is owned by exactly one
- * thread, and every operation — read or write — is submitted to that thread and
- * run serially. Because only the writer thread ever touches the data structures,
- * they need no locks; the cost moves from lock contention to a task hand-off per
- * operation.
- *
- * This is the practical "lockless" design used by low-latency engines (the
- * single-writer principle, à la LMAX Disruptor) rather than a lock-free data
- * structure, which isn't achievable over a [java.util.TreeMap]. Benchmarked head
- * to head with [LockingOrderBook]: the lock is expected to win uncontended (no
- * hand-off), while single-writer should degrade more gracefully as writer
- * contention rises, since there is no lock cache-line to bounce between cores.
- *
- * Owns a thread, so it is [AutoCloseable] — [close] stops the writer and the
- * instance must not be used afterwards.
+ * Single-writer book: one thread owns a [PlainOrderBook] and runs every op serially, so the data
+ * structures need no locks — the cost is a task hand-off per op (the single-writer principle, à la
+ * LMAX Disruptor; a lock-free `TreeMap` isn't achievable). Owns a thread, so [close] must be called.
  */
 class SingleWriterOrderBook(
     private val delegate: PlainOrderBook = PlainOrderBook(),
@@ -57,9 +45,7 @@ class SingleWriterOrderBook(
 
     override fun close() = writer.shutdown()
 
-    // Runs the task on the writer thread and waits for its result. Unwraps the
-    // ExecutionException so callers see the delegate's own exception (e.g. the
-    // IllegalArgumentException from an invalid level), not a wrapped one.
+    // Unwrap so callers see the delegate's own exception, not a wrapped ExecutionException.
     private fun <R> onWriter(task: Callable<R>): R =
         try {
             writer.submit(task).get()

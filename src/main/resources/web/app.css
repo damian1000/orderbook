@@ -1,7 +1,5 @@
-/* Kotlin Order Book — terminal-style dark UI.
-   A single dark phosphor theme: near-black canvas, warm-white ink, a teal brand
-   accent, and green/red reserved for bid/ask semantics. One monospace family
-   with tabular figures so every digit sits in a fixed column. */
+/* Terminal-style dark UI: near-black canvas, warm-white ink, a teal brand accent, green/red for
+   bid/ask, one monospace family with tabular figures so every digit sits in a fixed column. */
 
 :root {
   --bg-base: #08090c;

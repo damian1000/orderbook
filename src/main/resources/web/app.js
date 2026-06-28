@@ -1,8 +1,6 @@
-// Kotlin Order Book — front-end renderer.
-//
-// A thin view over the server's MarketSnapshot: the book arrives already aggregated by price with
-// cumulative depth, so this file only formats, lays out the DOM, diffs for the flash highlight, and
-// wires the order ticket + SSE stream. All non-trivial book logic lives (and is tested) on the JVM.
+// Front-end renderer: a thin view over the server's MarketSnapshot (already aggregated with
+// cumulative depth). It formats, builds the DOM, diffs for the flash highlight, and wires the order
+// ticket + SSE stream. All non-trivial book logic lives, and is tested, on the JVM.
 
 "use strict";
 

@@ -11,13 +11,9 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 
 /**
- * HTTP transport for a [MarketSession]: serves the static UI, exposes the JSON API, and pushes live
- * updates over SSE via an [SseBroadcaster].
- *
- * It is plumbing only — routing and request/response marshalling. All book behaviour lives in the
- * market layer and all rendering in the view layer. Uses only the JDK's built-in [HttpServer], so it
- * starts in milliseconds in a small heap; the cached thread pool serves the long-lived SSE streams
- * while the session serialises book access on its own writer thread.
+ * HTTP transport for a [Market]: serves the static UI, the JSON API, and live SSE updates via a
+ * [Broadcaster]. Plumbing only — book behaviour lives in the market layer, rendering in the view
+ * layer. JDK [HttpServer] on a cached pool, which serves the long-lived SSE streams.
  */
 class WebServer(
     private val session: Market,

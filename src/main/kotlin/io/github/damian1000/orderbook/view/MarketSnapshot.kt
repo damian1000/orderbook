@@ -20,12 +20,9 @@ data class TapeEntry(
 )
 
 /**
- * An immutable, render-ready projection of the book: each side aggregated by price (best level
- * first) with cumulative depth, plus the recent trade tape.
- *
- * It is deliberately pure — it takes plain lists, holds no reference to the book, and does no I/O —
- * so the aggregation and JSON serialisation are unit-tested directly rather than living inside the
- * web entry point (which is excluded from coverage). The web layer is then a thin transport over it.
+ * Immutable, render-ready projection: each side aggregated by price (best first) with cumulative
+ * depth, plus the recent tape. Pure and serialisable, so it is unit-tested directly and the web
+ * layer stays a thin transport over it.
  */
 data class MarketSnapshot(
     val timeMillis: Long,
@@ -33,7 +30,6 @@ data class MarketSnapshot(
     val asks: List<DepthLevel>,
     val tape: List<TapeEntry>,
 ) {
-    /** Hand-rolled JSON (no dependency) for the `/api/state`, `/api/order` and SSE payloads. */
     fun toJson(): String {
         val bidsJson = bids.joinToString(",", "[", "]", transform = ::levelJson)
         val asksJson = asks.joinToString(",", "[", "]", transform = ::levelJson)
@@ -53,10 +49,7 @@ data class MarketSnapshot(
     }
 
     companion object {
-        /**
-         * Builds a snapshot from each side's resting orders — given best level first, the order
-         * [io.github.damian1000.orderbook.OrderBook.getOrders] returns — and the current tape.
-         */
+        /** Builds a snapshot from each side's resting orders (best level first) and the current tape. */
         fun of(
             bids: List<Order>,
             asks: List<Order>,
