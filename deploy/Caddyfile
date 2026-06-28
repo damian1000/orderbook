@@ -1,0 +1,7 @@
+orderbook.damianhoward.com {
+	encode zstd gzip
+	reverse_proxy localhost:8080 {
+		# SSE/streaming responses must not be buffered, or live updates stall behind the proxy.
+		flush_interval -1
+	}
+}

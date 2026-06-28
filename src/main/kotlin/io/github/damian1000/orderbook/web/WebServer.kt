@@ -33,6 +33,7 @@ class WebServer(
     private fun route(exchange: HttpExchange) {
         try {
             when (exchange.requestURI.path) {
+                "/healthz" -> respond(exchange, 200, "text/plain", "ok")
                 "/" -> respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml)
                 "/app.css" -> respond(exchange, 200, "text/css; charset=utf-8", assets.appCss)
                 "/app.js" -> respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Order book matching engine and live demo
+After=network.target
+
+[Service]
+Environment=JAVA_HOME=/opt/jdk25
+Environment=JAVA_OPTS=-Xmx256m
+Environment=PORT=8080
+ExecStart=/home/ubuntu/orderbook/bin/orderbook
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
