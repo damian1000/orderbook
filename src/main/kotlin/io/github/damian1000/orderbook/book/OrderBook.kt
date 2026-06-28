@@ -27,6 +27,13 @@ interface OrderBook {
         level: Int,
     ): Long
 
-    /** Resting orders on `side`, best price first then time order. */
+    /** Resting orders on `side`, best price first then time order. Each is a detached snapshot. */
     fun getOrders(side: Side): List<Order>
+
+    /**
+     * The next order to fill on `side` — best price, oldest at that price — or null if the side is
+     * empty. A detached snapshot. O(log P): lets the matcher peek the top of book without
+     * materialising the whole side (which `getOrders` would).
+     */
+    fun bestResting(side: Side): Order?
 }

@@ -26,8 +26,8 @@ class MatchingEngine(
         val opposite = order.side.opposite()
 
         while (remaining > 0) {
-            // getOrders is best-price-first then time-first, so the head is the order to fill next.
-            val best = book.getOrders(opposite).firstOrNull() ?: break
+            // O(log P) peek at the top of book — no full-side list materialised per fill iteration.
+            val best = book.bestResting(opposite) ?: break
             if (!crosses(order.side, order.price, best.price)) break
 
             val fill = minOf(remaining, best.size)

@@ -187,6 +187,30 @@ abstract class OrderBookContractTest {
     }
 
     @Test
+    fun bestRestingReturnsTopOfBook() {
+        val bestOffer = orderBook.bestResting(Side.OFFER)
+        assertEquals(1L, bestOffer?.id)
+        assertEquals(price("19"), bestOffer?.price)
+        assertEquals(8L, bestOffer?.size)
+
+        val bestBid = orderBook.bestResting(Side.BID)
+        assertEquals(6L, bestBid?.id)
+        assertEquals(price("15"), bestBid?.price)
+        assertEquals(10L, bestBid?.size)
+    }
+
+    @Test
+    fun bestRestingOnEmptySideIsNull() {
+        val empty = newOrderBook()
+        try {
+            assertNull(empty.bestResting(Side.OFFER))
+            assertNull(empty.bestResting(Side.BID))
+        } finally {
+            (empty as? AutoCloseable)?.close()
+        }
+    }
+
+    @Test
     fun nonPositiveLevelThrows() {
         assertThrows(IllegalArgumentException::class.java) { orderBook.getPrice(Side.OFFER, 0) }
         assertThrows(IllegalArgumentException::class.java) { orderBook.getPrice(Side.OFFER, -1) }

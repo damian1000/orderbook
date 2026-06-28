@@ -36,4 +36,6 @@ class LockingOrderBook(
     ): Long = lock.read { delegate.getTotalSize(side, level) }
 
     override fun getOrders(side: Side): List<Order> = lock.read { delegate.getOrders(side) }
+
+    override fun bestResting(side: Side): Order? = lock.read { delegate.bestResting(side) }
 }

@@ -43,6 +43,8 @@ class SingleWriterOrderBook(
 
     override fun getOrders(side: Side): List<Order> = onWriter { delegate.getOrders(side) }
 
+    override fun bestResting(side: Side): Order? = onWriter { delegate.bestResting(side) }
+
     override fun close() = writer.shutdown()
 
     // Unwrap so callers see the delegate's own exception, not a wrapped ExecutionException.
