@@ -8,17 +8,25 @@ import io.github.damian1000.orderbook.PlainOrderBook
 import io.github.damian1000.orderbook.Price
 import io.github.damian1000.orderbook.Side
 import io.github.damian1000.orderbook.Trade
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A tiny, dependency-free web demo of the order book + [MatchingEngine].
  *
  * Submit an order through the browser and watch it match resting liquidity and print to the tape,
- * or rest on the book. Everything is in-memory and single-user; the book is not thread-safe, so the
- * HTTP server runs on a single-threaded executor which serialises every request.
+ * or rest on the book. The book is shared by everyone connected, and updates are pushed live over
+ * Server-Sent Events — submit from one tab and every other tab sees the book and tape change.
+ *
+ * The book is not thread-safe, so every mutation and read runs on a single owning thread
+ * ([engineExec]) — the single-writer principle — which lets the HTTP server use a normal thread
+ * pool for the long-lived SSE connections without ever touching the book concurrently.
  *
  * Uses only the JDK's built-in [HttpServer] — no web framework — so it starts in milliseconds and
  * runs comfortably in a small heap.
@@ -29,26 +37,47 @@ private val nextId = AtomicLong(1000)
 private val tape = ArrayDeque<Trade>()
 private const val TAPE_LIMIT = 25
 
+/** Serialises all access to the non-thread-safe [book] and [tape] onto one owning thread. */
+private val engineExec = Executors.newSingleThreadExecutor { Thread(it, "orderbook-engine").apply { isDaemon = true } }
+
+private fun <T> onEngine(block: () -> T): T = engineExec.submit(block).get()
+
+/** Connected SSE clients; each drains its own queue so a slow client can't block the others. */
+private class Client {
+    val queue = LinkedBlockingQueue<String>()
+}
+
+private val clients = CopyOnWriteArrayList<Client>()
+
+private val restingAsks = listOf(Triple("102.00", Side.OFFER, 12L), Triple("101.50", Side.OFFER, 8L), Triple("101.00", Side.OFFER, 5L))
+private val restingBids = listOf(Triple("99.50", Side.BID, 6L), Triple("99.00", Side.BID, 10L), Triple("98.00", Side.BID, 15L))
+
+private fun place(orders: List<Triple<String, Side, Long>>) =
+    orders.forEach { (price, side, size) -> book.addOrder(Order(nextId.getAndIncrement(), Price.of(price), side, size)) }
+
 private fun seed() {
-    val resting =
-        listOf(
-            Triple("102.00", Side.OFFER, 12L),
-            Triple("101.50", Side.OFFER, 8L),
-            Triple("101.00", Side.OFFER, 5L),
-            Triple("99.50", Side.BID, 6L),
-            Triple("99.00", Side.BID, 10L),
-            Triple("98.00", Side.BID, 15L),
-        )
-    resting.forEach { (price, side, size) -> book.addOrder(Order(nextId.getAndIncrement(), Price.of(price), side, size)) }
+    place(restingAsks)
+    place(restingBids)
+}
+
+/** Self-healing: a taker can sweep a side clean — top up whichever side has emptied so the public book never looks empty. */
+private fun reseedEmptySides() {
+    if (book.getOrders(Side.OFFER).isEmpty()) place(restingAsks)
+    if (book.getOrders(Side.BID).isEmpty()) place(restingBids)
 }
 
 fun main() {
-    seed()
+    onEngine(::seed)
     val port = (System.getenv("PORT") ?: "8080").toInt()
     val server = HttpServer.create(InetSocketAddress(port), 0)
-    server.executor = Executors.newSingleThreadExecutor()
+    server.executor = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
     server.createContext("/", ::handle)
     server.start()
+
+    // Heartbeat keeps SSE connections alive through proxies and reaps clients that have gone away.
+    val heartbeat = Executors.newSingleThreadScheduledExecutor { Thread(it, "sse-heartbeat").apply { isDaemon = true } }
+    heartbeat.scheduleAtFixedRate({ broadcast(": ping\n\n") }, 15, 15, TimeUnit.SECONDS)
+
     println("Order book demo listening on :$port")
 }
 
@@ -56,8 +85,9 @@ private fun handle(exchange: HttpExchange) {
     try {
         when (exchange.requestURI.path) {
             "/" -> respond(exchange, 200, "text/html; charset=utf-8", PAGE)
-            "/api/state" -> respond(exchange, 200, "application/json", stateJson())
+            "/api/state" -> respond(exchange, 200, "application/json", onEngine(::stateJson))
             "/api/order" -> respond(exchange, 200, "application/json", submit(exchange))
+            "/api/stream" -> stream(exchange)
             else -> respond(exchange, 404, "text/plain", "not found")
         }
     } catch (e: IllegalArgumentException) {
@@ -70,12 +100,54 @@ private fun submit(exchange: HttpExchange): String {
     val side = if (params["side"].equals("BID", true) || params["side"].equals("BUY", true)) Side.BID else Side.OFFER
     val price = Price.of(params["price"] ?: error("price required"))
     val size = (params["size"] ?: error("size required")).toLong()
-    val trades = engine.submit(Order(nextId.getAndIncrement(), price, side, size))
-    trades.forEach {
-        tape.addFirst(it)
-        if (tape.size > TAPE_LIMIT) tape.removeLast()
+
+    val (reply, state) =
+        onEngine {
+            val trades = engine.submit(Order(nextId.getAndIncrement(), price, side, size))
+            trades.forEach {
+                tape.addFirst(it)
+                if (tape.size > TAPE_LIMIT) tape.removeLast()
+            }
+            reseedEmptySides()
+            val body = stateBody()
+            """{"matched":${trades.size},$body""" to "{$body"
+        }
+    broadcast("data: $state\n\n")
+    return reply
+}
+
+/** Streams live state to a browser over Server-Sent Events until the client disconnects. */
+private fun stream(exchange: HttpExchange) {
+    exchange.responseHeaders.add("Content-Type", "text/event-stream; charset=utf-8")
+    exchange.responseHeaders.add("Cache-Control", "no-cache")
+    exchange.responseHeaders.add("Connection", "keep-alive")
+    exchange.sendResponseHeaders(200, 0)
+    val os = exchange.responseBody
+    val client = Client()
+    try {
+        write(os, "retry: 3000\n\ndata: ${onEngine(::stateJson)}\n\n")
+        clients.add(client)
+        while (true) {
+            write(os, client.queue.take())
+        }
+    } catch (_: Exception) {
+        // Client went away (write failed) or the server is shutting down (interrupt) — fall through to cleanup.
+    } finally {
+        clients.remove(client)
+        runCatching { exchange.close() }
     }
-    return """{"matched":${trades.size},${stateBody()}"""
+}
+
+private fun broadcast(message: String) {
+    clients.forEach { it.queue.offer(message) }
+}
+
+private fun write(
+    os: OutputStream,
+    message: String,
+) {
+    os.write(message.toByteArray(StandardCharsets.UTF_8))
+    os.flush()
 }
 
 private fun stateJson(): String = "{${stateBody()}"
@@ -136,9 +208,10 @@ private val PAGE =
       h3{font-size:13px;color:#94a3b8;margin:18px 0 6px;text-transform:uppercase;letter-spacing:.05em}
       .tape td:nth-child(2){color:#cbd5e1}
       .buy{color:#4ade80}.sell{color:#f87171}
+      .live{font-size:11px;color:#64748b} .live.on{color:#4ade80}
     </style></head><body><div class="wrap">
       <h1>Kotlin Order Book — live demo</h1>
-      <p class="sub">Submit a limit order; watch it match resting liquidity (price-time priority) and print to the tape, or rest on the book.</p>
+      <p class="sub">Submit a limit order; watch it match resting liquidity (price-time priority) and print to the tape, or rest on the book. Updates stream live — open a second tab to see it.</p>
       <form onsubmit="return send(event)">
         <label>Side<select id="side"><option value="BID">Buy</option><option value="OFFER">Sell</option></select></label>
         <label>Price<input id="price" value="101.00" size="8"></label>
@@ -151,6 +224,7 @@ private val PAGE =
       </div>
       <h3>Trade tape</h3>
       <table class="tape"><thead><tr><th>Side</th><th>Price</th><th>Size</th></tr></thead><tbody id="tape"></tbody></table>
+      <p class="live" id="live">connecting…</p>
     <script>
       function px(p){return parseFloat(p).toFixed(2)}
       function rows(arr){return arr.map(l=>'<tr><td>'+px(l.price)+'</td><td>'+l.size+'</td></tr>').join('')||'<tr><td colspan=2>—</td></tr>'}
@@ -159,10 +233,13 @@ private val PAGE =
         document.getElementById('asks').innerHTML=rows(s.asks);
         document.getElementById('tape').innerHTML=s.tape.map(t=>'<tr><td class="'+(t.side=='BID'?'buy':'sell')+'">'+(t.side=='BID'?'BUY':'SELL')+'</td><td>'+px(t.price)+'</td><td>'+t.size+'</td></tr>').join('')||'<tr><td colspan=3>no trades yet</td></tr>';
       }
-      async function refresh(){render(await (await fetch('/api/state')).json())}
+      function live(on){const e=document.getElementById('live');e.textContent=on?'● live':'reconnecting…';e.className='live'+(on?' on':'');}
       async function send(e){e.preventDefault();
         const q='side='+side.value+'&price='+encodeURIComponent(price.value)+'&size='+size.value;
         render(await (await fetch('/api/order?'+q)).json());return false;}
-      refresh();setInterval(refresh,2000);
+      const es=new EventSource('/api/stream');
+      es.onmessage=e=>render(JSON.parse(e.data));
+      es.onopen=()=>live(true);
+      es.onerror=()=>live(false);
     </script></div></body></html>
     """.trimIndent()
