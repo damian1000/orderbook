@@ -1,8 +1,8 @@
 package io.github.damian1000.orderbook.view
 
-import io.github.damian1000.orderbook.Order
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 
 /** A price level aggregated across every resting order at that price, with the running depth total. */
 data class DepthLevel(

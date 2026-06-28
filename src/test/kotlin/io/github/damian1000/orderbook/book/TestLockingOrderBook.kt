@@ -1,11 +1,14 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.book
 
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
-class TestKotlinOrderBook : OrderBookContractTest() {
-    override fun newOrderBook(): OrderBook = KotlinOrderBook()
+class TestLockingOrderBook : OrderBookContractTest() {
+    override fun newOrderBook(): OrderBook = LockingOrderBook()
 
     @Test
     fun invalidOrderInputsAreRejected() {

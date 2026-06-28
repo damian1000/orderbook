@@ -1,4 +1,4 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.model
 
 /**
  * A fill produced when an incoming order crosses resting liquidity.

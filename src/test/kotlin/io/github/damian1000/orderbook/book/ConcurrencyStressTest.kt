@@ -1,5 +1,8 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.book
 
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -12,7 +15,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Multi-threaded stress tests for `KotlinOrderBook`. Under heavy contention
+ * Multi-threaded stress tests for `LockingOrderBook`. Under heavy contention
  * they assert two properties: liveness (operations make progress and the
  * structures never deadlock) and invariants (writers don't drop or duplicate
  * orders, and the book stays internally consistent — no exceptions from a
@@ -27,7 +30,7 @@ class ConcurrencyStressTest {
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
     fun balancedAddThenRemoveLeavesBookEmpty() {
-        val book = KotlinOrderBook()
+        val book = LockingOrderBook()
         val threads = 8
         val ordersPerThread = 5_000
         val executor = Executors.newFixedThreadPool(threads)
@@ -60,7 +63,7 @@ class ConcurrencyStressTest {
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
     fun mixedReadersAndWritersNeverThrowAndPreserveIds() {
-        val book = KotlinOrderBook()
+        val book = LockingOrderBook()
         val totalOrders = 2_000
         for (id in 0L until totalOrders) {
             val side = if (id % 2 == 0L) Side.BID else Side.OFFER
@@ -130,7 +133,7 @@ class ConcurrencyStressTest {
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
     fun concurrentModifyPreservesOrderCountAndIds() {
-        val book = KotlinOrderBook()
+        val book = LockingOrderBook()
         val totalOrders = 500
         for (id in 0L until totalOrders) {
             book.addOrder(Order(id, Price.of("100"), Side.BID, 10))
@@ -164,7 +167,7 @@ class ConcurrencyStressTest {
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
     fun heavyContentionOnSinglePriceLevelDoesNotDeadlock() {
-        val book = KotlinOrderBook()
+        val book = LockingOrderBook()
         val threads = 8
         val opsPerThread = 5_000
         val executor = Executors.newFixedThreadPool(threads)

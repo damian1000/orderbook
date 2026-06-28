@@ -29,7 +29,7 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
   - **`sellOrders`**: `TreeMap<Price, LinkedList<Order>>`, natural ordering — lowest offer first.
   - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
   - Per-price queues are `LinkedList<Order>` so insertion order = time priority.
-- **Two concurrency strategies wrap that core**, differing only in how they serialise access — `KotlinOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
+- **Two concurrency strategies wrap that core**, differing only in how they serialise access — `LockingOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
 - **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail. This is a deliberate simplification: real venues keep queue priority on a size _decrease_ but send a size _increase_ to the back of the queue. Here any size change retains its place.
 - Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
@@ -50,7 +50,7 @@ The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking e
 
 Two interchangeable `OrderBook` implementations share the same `PlainOrderBook` core:
 
-- **`KotlinOrderBook` (lock-based, default).** Reads (`getPrice`, `getTotalSize`, `getOrders`) take a read lock and see a consistent snapshot for that call; writes (`addOrder`, `modifyOrder`, `removeOrder`) take the write lock. The read/write split lets reads run concurrently.
+- **`LockingOrderBook` (lock-based, default).** Reads (`getPrice`, `getTotalSize`, `getOrders`) take a read lock and see a consistent snapshot for that call; writes (`addOrder`, `modifyOrder`, `removeOrder`) take the write lock. The read/write split lets reads run concurrently.
 - **`SingleWriterOrderBook`.** One owning thread runs every operation serially; callers hand work off and await the result, so no locks touch the data structures. This is the practical "lockless" design used by low-latency engines (the single-writer principle), rather than a lock-free `TreeMap`, which isn't achievable. It is `AutoCloseable` — `close()` stops the writer thread.
 
 The [benchmarks](#benchmarks) compare the two under contention.
@@ -62,7 +62,7 @@ The [benchmarks](#benchmarks) compare the two under contention.
 It drives only the public `add` / `remove` / `modify` / query contract — never the book's internals — so the data structure stays a clean, independently-benchmarked component and either concurrency strategy can be matched on.
 
 ```kotlin
-val engine = MatchingEngine(KotlinOrderBook())
+val engine = MatchingEngine(LockingOrderBook())
 engine.submit(Order(1L, Price.of("101"), Side.OFFER, 5))        // rests: nothing to cross
 val fills = engine.submit(Order(2L, Price.of("101"), Side.BID, 8))
 // fills = [Trade(101.00, size 5, resting=1, incoming=2, BID)]; the remaining 3 rests as the best bid
@@ -101,11 +101,11 @@ JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an
 
 5×2s warmup + 8×2s measurement, 2 forks.
 
-| Workload                           | `KotlinOrderBook` (lock) | `SingleWriterOrderBook` |
-| ---------------------------------- | -----------------------: | ----------------------: |
-| read-heavy (best bid + best offer) |     **2719 ± 94** ops/ms |         250 ± 11 ops/ms |
-| mixed (~90% reads)                 |   **1378 ± 1058** ops/ms |         447 ± 11 ops/ms |
-| write-heavy (add + remove)         |     **223 ± 135** ops/ms |         168 ± 27 ops/ms |
+| Workload                           | `LockingOrderBook` (lock) | `SingleWriterOrderBook` |
+| ---------------------------------- | ------------------------: | ----------------------: |
+| read-heavy (best bid + best offer) |      **2719 ± 94** ops/ms |         250 ± 11 ops/ms |
+| mixed (~90% reads)                 |    **1378 ± 1058** ops/ms |         447 ± 11 ops/ms |
+| write-heavy (add + remove)         |      **223 ± 135** ops/ms |         168 ± 27 ops/ms |
 
 Reading the table:
 
@@ -124,7 +124,7 @@ java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=l
 ## Use it
 
 ```kotlin
-val book: OrderBook = KotlinOrderBook()
+val book: OrderBook = LockingOrderBook()
 
 book.addOrder(Order(id = 1L, price = Price.of("19"), side = Side.OFFER, size = 8))
 book.addOrder(Order(id = 2L, price = Price.of("21"), side = Side.OFFER, size = 16))

@@ -1,5 +1,10 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.engine
 
+import io.github.damian1000.orderbook.book.PlainOrderBook
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
+import io.github.damian1000.orderbook.model.Trade
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test

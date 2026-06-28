@@ -1,5 +1,8 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.book
 
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -13,7 +16,7 @@ import kotlin.concurrent.write
  * Note the workload is write-heavy — only the three query methods read — so the
  * read/write split buys little over a plain lock here.
  */
-class KotlinOrderBook(
+class LockingOrderBook(
     private val delegate: PlainOrderBook = PlainOrderBook(),
 ) : OrderBook {
     private val lock = ReentrantReadWriteLock()

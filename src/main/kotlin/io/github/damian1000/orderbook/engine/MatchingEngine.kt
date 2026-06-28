@@ -1,4 +1,22 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.engine
+
+import io.github.damian1000.orderbook.book.OrderBook
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
+import io.github.damian1000.orderbook.model.Trade
+
+/**
+ * A matching strategy: takes an incoming order, crosses it against resting liquidity, and returns
+ * the resulting fills (any unfilled remainder rests on the book).
+ *
+ * The interface names the capability independently of the rule used. [MatchingEngine] implements
+ * price-time priority; richer strategies (pro-rata, etc.) would be alternative implementations the
+ * rest of the system consumes through this same contract.
+ */
+interface Matcher {
+    fun submit(order: Order): List<Trade>
+}
 
 /**
  * Price-time-priority matching on top of an [OrderBook].
@@ -22,13 +40,13 @@ package io.github.damian1000.orderbook
  */
 class MatchingEngine(
     private val book: OrderBook,
-) {
+) : Matcher {
     /**
      * Matches [order] against the book, returning the [Trade]s it generated (in
      * execution order). Any unfilled remainder is added to the book as a resting
      * limit order on [order]'s own side.
      */
-    fun submit(order: Order): List<Trade> {
+    override fun submit(order: Order): List<Trade> {
         val trades = mutableListOf<Trade>()
         var remaining = order.size
         val opposite = order.side.opposite()

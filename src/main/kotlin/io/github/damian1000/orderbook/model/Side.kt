@@ -1,4 +1,4 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.model
 
 /**
  * The two sides of an order book.

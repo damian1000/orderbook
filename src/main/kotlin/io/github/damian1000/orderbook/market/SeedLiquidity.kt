@@ -1,7 +1,7 @@
 package io.github.damian1000.orderbook.market
 
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 
 /** A single resting order used to seed — and replenish — a side of the book. */
 data class SeedOrder(

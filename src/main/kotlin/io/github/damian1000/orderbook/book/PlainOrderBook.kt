@@ -1,5 +1,8 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.book
 
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import java.util.Comparator
 import java.util.LinkedList
 import java.util.NavigableMap
@@ -8,7 +11,7 @@ import java.util.TreeMap
 /**
  * The order-book data structure and algorithms with no concurrency control.
  *
- * Not thread-safe on its own — callers must serialise access. [KotlinOrderBook]
+ * Not thread-safe on its own — callers must serialise access. [LockingOrderBook]
  * wraps it in a read/write lock; [SingleWriterOrderBook] confines it to a single
  * thread. Keeping the logic here means those two differ only in *how* they
  * synchronise, which is exactly what the JMH head-to-head is meant to isolate.

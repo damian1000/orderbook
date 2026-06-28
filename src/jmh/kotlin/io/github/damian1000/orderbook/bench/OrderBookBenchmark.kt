@@ -1,11 +1,11 @@
 package io.github.damian1000.orderbook.bench
 
-import io.github.damian1000.orderbook.KotlinOrderBook
-import io.github.damian1000.orderbook.Order
-import io.github.damian1000.orderbook.OrderBook
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
-import io.github.damian1000.orderbook.SingleWriterOrderBook
+import io.github.damian1000.orderbook.book.LockingOrderBook
+import io.github.damian1000.orderbook.book.OrderBook
+import io.github.damian1000.orderbook.book.SingleWriterOrderBook
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Level
@@ -42,7 +42,7 @@ open class OrderBookBenchmark {
     fun setup() {
         book =
             when (impl) {
-                "lock" -> KotlinOrderBook()
+                "lock" -> LockingOrderBook()
                 "single-writer" -> SingleWriterOrderBook()
                 else -> error("unknown impl: $impl")
             }

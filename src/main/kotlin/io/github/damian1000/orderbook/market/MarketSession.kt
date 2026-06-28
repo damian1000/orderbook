@@ -1,10 +1,11 @@
 package io.github.damian1000.orderbook.market
 
-import io.github.damian1000.orderbook.MatchingEngine
-import io.github.damian1000.orderbook.Order
-import io.github.damian1000.orderbook.PlainOrderBook
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.book.PlainOrderBook
+import io.github.damian1000.orderbook.engine.Matcher
+import io.github.damian1000.orderbook.engine.MatchingEngine
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import io.github.damian1000.orderbook.view.MarketSnapshot
 import io.github.damian1000.orderbook.view.TapeEntry
 import java.util.concurrent.Executors
@@ -17,7 +18,27 @@ data class SubmitOutcome(
 )
 
 /**
- * A live, shared trading session over a [PlainOrderBook] driven by a [MatchingEngine].
+ * A live market that accepts orders and exposes the current book.
+ *
+ * The seam between the application layer and the transport ([io.github.damian1000.orderbook.web]):
+ * the web layer depends on this interface, not on a concrete session, so it can be driven by a fake
+ * in tests and the implementation can change without touching the transport.
+ */
+interface Market {
+    /** Submits a limit order and returns the fills plus the resulting snapshot. */
+    fun submit(
+        side: Side,
+        price: Price,
+        size: Long,
+    ): SubmitOutcome
+
+    /** The current state of the book and recent tape. */
+    fun snapshot(): MarketSnapshot
+}
+
+/**
+ * The default [Market]: a live, shared trading session over a [PlainOrderBook] driven by a
+ * [MatchingEngine].
  *
  * The book is not thread-safe, so every read and mutation is serialised onto one owning thread — the
  * single-writer principle — which makes the session safe to share across many concurrent callers
@@ -30,9 +51,10 @@ class MarketSession(
     private val seed: SeedLiquidity = SeedLiquidity.default(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val tapeLimit: Int = 30,
-) : AutoCloseable {
+) : Market,
+    AutoCloseable {
     private val book = PlainOrderBook()
-    private val engine = MatchingEngine(book)
+    private val engine: Matcher = MatchingEngine(book)
     private val nextId = AtomicLong(1000)
     private val tape = ArrayDeque<TapeEntry>()
     private val writer = Executors.newSingleThreadExecutor { Thread(it, "market-session").apply { isDaemon = true } }
@@ -42,7 +64,7 @@ class MarketSession(
     }
 
     /** Submits a limit order, returning the fills it generated and the resulting [MarketSnapshot]. */
-    fun submit(
+    override fun submit(
         side: Side,
         price: Price,
         size: Long,
@@ -59,7 +81,7 @@ class MarketSession(
         }
 
     /** The current state of the book and tape. */
-    fun snapshot(): MarketSnapshot = onWriter { snapshotAt(clock()) }
+    override fun snapshot(): MarketSnapshot = onWriter { snapshotAt(clock()) }
 
     override fun close() {
         writer.shutdownNow()

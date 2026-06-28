@@ -1,5 +1,8 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.book
 
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
@@ -15,7 +18,7 @@ import java.util.concurrent.Executors
  * This is the practical "lockless" design used by low-latency engines (the
  * single-writer principle, à la LMAX Disruptor) rather than a lock-free data
  * structure, which isn't achievable over a [java.util.TreeMap]. Benchmarked head
- * to head with [KotlinOrderBook]: the lock is expected to win uncontended (no
+ * to head with [LockingOrderBook]: the lock is expected to win uncontended (no
  * hand-off), while single-writer should degrade more gracefully as writer
  * contention rises, since there is no lock cache-line to bounce between cores.
  *

@@ -9,13 +9,36 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
+ * Pushes live state to connected browsers.
+ *
+ * Names the push capability independently of the wire mechanism: [SseBroadcaster] implements it over
+ * Server-Sent Events; a WebSocket implementation would satisfy the same contract, leaving [WebServer]
+ * unchanged.
+ */
+interface Broadcaster {
+    /** Starts the periodic keep-alive. Call once, after the server is up. */
+    fun startHeartbeat(periodSeconds: Long = 15)
+
+    /** Pushes a state update (JSON) to every connected client. */
+    fun broadcast(json: String)
+
+    /** Serves one client connection: emits [initialJson], then forwards updates until it disconnects. */
+    fun stream(
+        exchange: HttpExchange,
+        initialJson: String,
+    )
+}
+
+/**
  * Server-Sent Events fan-out.
  *
  * Holds the connected browsers and pushes each a copy of every broadcast through its own queue, so a
  * slow client can't block the others. A periodic heartbeat keeps connections alive through proxies
  * and lets a write to a departed client fail, reaping it.
  */
-class SseBroadcaster : AutoCloseable {
+class SseBroadcaster :
+    Broadcaster,
+    AutoCloseable {
     private class Client {
         val queue = LinkedBlockingQueue<String>()
     }
@@ -23,19 +46,13 @@ class SseBroadcaster : AutoCloseable {
     private val clients = CopyOnWriteArrayList<Client>()
     private val heartbeat = Executors.newSingleThreadScheduledExecutor { Thread(it, "sse-heartbeat").apply { isDaemon = true } }
 
-    /** Starts the keep-alive ping. Call once, after the server is up. */
-    fun startHeartbeat(periodSeconds: Long = 15) {
+    override fun startHeartbeat(periodSeconds: Long) {
         heartbeat.scheduleAtFixedRate({ enqueue(": ping\n\n") }, periodSeconds, periodSeconds, TimeUnit.SECONDS)
     }
 
-    /** Pushes a `data:` frame carrying [json] to every connected client. */
-    fun broadcast(json: String) = enqueue(asEvent(json))
+    override fun broadcast(json: String) = enqueue(asEvent(json))
 
-    /**
-     * Handles one SSE request: emits [initialJson] immediately, then forwards every broadcast until
-     * the client disconnects (a failed write) or the server shuts down (an interrupt).
-     */
-    fun stream(
+    override fun stream(
         exchange: HttpExchange,
         initialJson: String,
     ) {

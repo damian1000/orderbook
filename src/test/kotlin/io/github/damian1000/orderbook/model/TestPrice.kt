@@ -1,4 +1,4 @@
-package io.github.damian1000.orderbook
+package io.github.damian1000.orderbook.model
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows

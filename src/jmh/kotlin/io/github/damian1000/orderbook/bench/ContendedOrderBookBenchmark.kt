@@ -1,10 +1,10 @@
 package io.github.damian1000.orderbook.bench
 
-import io.github.damian1000.orderbook.KotlinOrderBook
-import io.github.damian1000.orderbook.Order
-import io.github.damian1000.orderbook.OrderBook
-import io.github.damian1000.orderbook.Side
-import io.github.damian1000.orderbook.SingleWriterOrderBook
+import io.github.damian1000.orderbook.book.LockingOrderBook
+import io.github.damian1000.orderbook.book.OrderBook
+import io.github.damian1000.orderbook.book.SingleWriterOrderBook
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Side
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Level
@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Multi-threaded, contended head-to-head between the lock-based [KotlinOrderBook]
+ * Multi-threaded, contended head-to-head between the lock-based [LockingOrderBook]
  * and the [SingleWriterOrderBook]. Throughput (ops/ms, higher is better) with a
  * shared book hammered by [Threads] worker threads — this is the regime the
  * single-threaded [OrderBookBenchmark] cannot show.
@@ -54,7 +54,7 @@ open class ContendedOrderBookBenchmark {
     fun setup() {
         book =
             when (impl) {
-                "lock" -> KotlinOrderBook()
+                "lock" -> LockingOrderBook()
                 "single-writer" -> SingleWriterOrderBook()
                 else -> error("unknown impl: $impl")
             }

@@ -2,9 +2,10 @@ package io.github.damian1000.orderbook.web
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
@@ -19,9 +20,9 @@ import java.util.concurrent.Executors
  * while the session serialises book access on its own writer thread.
  */
 class WebServer(
-    private val session: MarketSession,
+    private val session: Market,
     private val assets: WebAssets,
-    private val broadcaster: SseBroadcaster,
+    private val broadcaster: Broadcaster,
     private val port: Int,
 ) {
     fun start() {

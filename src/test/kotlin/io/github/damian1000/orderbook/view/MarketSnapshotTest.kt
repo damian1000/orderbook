@@ -1,8 +1,8 @@
 package io.github.damian1000.orderbook.view
 
-import io.github.damian1000.orderbook.Order
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.model.Order
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test

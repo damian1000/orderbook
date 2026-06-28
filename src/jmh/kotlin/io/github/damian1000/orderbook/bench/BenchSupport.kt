@@ -1,7 +1,7 @@
 package io.github.damian1000.orderbook.bench
 
-import io.github.damian1000.orderbook.Price
-import io.github.damian1000.orderbook.Side
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
 
 // 10^Price.SCALE — a whole price unit expressed in ticks.
 internal const val UNIT = 100_000_000L
