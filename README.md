@@ -25,12 +25,12 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 
 - **Prices are integer ticks.** `Price` is a `@JvmInline value class` over a scaled `Long` (`SCALE = 8` decimal places). Scaled integers keep prices exact — no binary floating-point drift, so two logically equal prices always share a map key — and make comparison a primitive `Long` op. `BigDecimal` is touched only when parsing or formatting a decimal string, never on the matching path.
 - **`PlainOrderBook`** holds the data structure and algorithms, with no concurrency control:
-  - **`buyOrders`**: `TreeMap<Price, LinkedList<Order>>`, reverse ordering — highest bid first.
-  - **`sellOrders`**: `TreeMap<Price, LinkedList<Order>>`, natural ordering — lowest offer first.
+  - **`buyOrders`**: `TreeMap<Price, ArrayDeque<Order>>`, reverse ordering — highest bid first.
+  - **`sellOrders`**: `TreeMap<Price, ArrayDeque<Order>>`, natural ordering — lowest offer first.
   - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
-  - Per-price queues are `LinkedList<Order>` so insertion order = time priority.
+  - Per-price queues are `ArrayDeque<Order>` — contiguous and cache-friendly, with `addLast` = arrival order = time priority and the head the next to fill.
 - **Two concurrency strategies wrap that core**, differing only in how they serialise access — `LockingOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
-- **Time priority preserved on modify**: replacing an order in its `LinkedList` preserves its position — it is not moved to the tail. This is a deliberate simplification: real venues keep queue priority on a size _decrease_ but send a size _increase_ to the back of the queue. Here any size change retains its place.
+- **Time priority preserved on modify**: a size change mutates the resting order **in place** (the `ordersMap` and the queue hold the same `Order`), so it keeps its queue position rather than moving to the tail. This is a deliberate simplification: real venues keep queue priority on a size _decrease_ but send a size _increase_ to the back of the queue; here any size change retains its place.
 - Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
 ## Complexity
@@ -38,13 +38,13 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 | Operation                   | Cost                                                     | Notes                                                                                                              |
 | --------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `addOrder`                  | **O(log P)**                                             | `P` = distinct price levels on that side; replacing an existing id also removes its old queue entry                |
-| `removeOrder`               | **O(log P + N_p)**                                       | id-lookup O(1); removing from the `LinkedList` is O(N) at that price level                                         |
-| `modifyOrder`               | **O(log P + N_p)**                                       | finds and replaces the existing queue element in place                                                             |
+| `removeOrder`               | **O(log P + N_p)**                                       | id-lookup O(1); removing from the `ArrayDeque` is O(N) at that price level                                         |
+| `modifyOrder`               | **O(1)**                                                 | id-lookup O(1); the map and queue share the `Order`, so the size mutates in place — no price-level scan            |
 | `getPrice(side, level)`     | **O(log P)** for level 1, otherwise **O(log P + level)** | `TreeMap.firstKey()` walks the tree to the leftmost node for the best price; higher levels iterate keys from there |
-| `getTotalSize(side, level)` | **O(level + N_p)**                                       | sums the LinkedList at that level                                                                                  |
+| `getTotalSize(side, level)` | **O(level + N_p)**                                       | sums the `ArrayDeque` at that level                                                                                |
 | `getOrders(side)`           | **O(P + N)**                                             | walks all per-price queues                                                                                         |
 
-The remove/modify cost could be O(log P) instead of O(log P + N_p) by tracking each order's node in its `LinkedList` (or replacing with an indexed map). Trade-off is more bookkeeping for a rarely-hot path.
+The remove cost could be O(log P) instead of O(log P + N_p) by tracking each order's position in its `ArrayDeque` with an intrusive index map. Trade-off is more bookkeeping for a rarely-hot path.
 
 ## Concurrency
 
@@ -113,12 +113,24 @@ Reading the table:
 - **But the lock's throughput is wildly variable under write contention** (±1058 on mixed, ±135 on write-heavy) while the single writer is rock-steady (±11–27). Predictable latency is what a matching engine actually cares about, so stability — not raw throughput — is the single-writer's selling point here.
 - **The baseline single writer doesn't realise the theoretical win** because its hand-off still goes through a blocking queue and `Future.get()` (locks and thread parking) — it relocates locking rather than removing it, and adds cross-core wakeup latency. Turning the stability into a throughput win would need a Disruptor-style busy-spin ring buffer; that's the natural follow-up.
 
+### Submission latency and allocation
+
+End-to-end `MatchingEngine.submit()` — the path the live site runs — measured in JMH `SampleTime` (the µs-scale regime where the sampling timer is meaningful; the sub-µs raw-book ops above stay `AverageTime`, since ~25 ns of `nanoTime` overhead would swamp a ~16 ns lookup). The `gc` profiler reports allocation per operation.
+
+| `submit()` (10k orders, 50 levels) |    p50 |    p90 |    p99 |   p99.9 |  alloc/op |
+| ---------------------------------- | -----: | -----: | -----: | ------: | --------: |
+| marketable (fills the top of book) | 800 ns | 900 ns | 1.1 µs |  ~11 µs | **401 B** |
+| passive (rests on the book)        | 100 ns | 200 ns | 300 ns | ~2.7 µs | **384 B** |
+
+The hot path is near-allocation-free by design: the matcher peeks the top of book in **O(log P)** (`bestResting`) rather than materialising the side, a partial fill decrements the resting order's remaining size **in place** rather than replacing it, and the per-price queues are cache-friendly `ArrayDeque`s. The few hundred bytes per submit are the incoming order, the detached snapshot handed back to the caller, and — when it crosses — the emitted `Trade`. The p99.9 tail is occasional GC / JIT / safepoint activity, not the algorithm.
+
 Reproduce:
 
 ```bash
 ./gradlew jmhJar
 java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
 java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=lock -f 1
+java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
 ```
 
 ## Use it
