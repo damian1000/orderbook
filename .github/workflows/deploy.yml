@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v7 # for deploy/orderbook.service
 
       - name: Download distribution
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: orderbook-dist
 
