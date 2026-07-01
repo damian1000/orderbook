@@ -1,8 +1,8 @@
 # Kotlin Order Book
 
-[![CI](https://github.com/damian1000/kotlin-orderbook/actions/workflows/ci.yml/badge.svg)](https://github.com/damian1000/kotlin-orderbook/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/damian1000/kotlin-orderbook/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian1000/kotlin-orderbook/actions/workflows/codeql.yml)
-[![codecov](https://codecov.io/gh/damian1000/kotlin-orderbook/graph/badge.svg)](https://codecov.io/gh/damian1000/kotlin-orderbook)
+[![CI](https://github.com/damian1000/orderbook/actions/workflows/ci.yml/badge.svg)](https://github.com/damian1000/orderbook/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/damian1000/orderbook/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian1000/orderbook/actions/workflows/codeql.yml)
+[![codecov](https://codecov.io/gh/damian1000/orderbook/graph/badge.svg)](https://codecov.io/gh/damian1000/orderbook)
 
 A small, thread-safe **limit order book** and **price-time-priority matching engine** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications — then submit crossing orders and watch them match.
 
@@ -128,9 +128,9 @@ Reproduce:
 
 ```bash
 ./gradlew jmhJar
-java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
-java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=lock -f 1
-java -jar build/libs/kotlin-orderbook-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
+java -jar build/libs/orderbook-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
+java -jar build/libs/orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=lock -f 1
+java -jar build/libs/orderbook-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
 ```
 
 ## Use it
