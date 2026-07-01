@@ -33,6 +33,11 @@ jobs:
       - name: Spotless check # ktlint for Kotlin, Prettier for HTML/CSS/JS + YAML/Markdown
         run: ./gradlew --no-daemon spotlessCheck
 
+      - name: ESLint the web front end
+        run: |
+          npm ci
+          npm run lint
+
       - name: Build, test, and enforce coverage
         run: ./gradlew --no-daemon clean check
 

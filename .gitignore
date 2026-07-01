@@ -39,6 +39,9 @@ out/
 ### Kotlin ###
 .kotlin/
 
+### Node (ESLint tooling) ###
+node_modules/
+
 ### Secrets ###
 .env
 .env.local
