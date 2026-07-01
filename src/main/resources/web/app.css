@@ -17,8 +17,11 @@
 
   --ink: #e8e8ec;
   --ink-2: #b4b4be;
-  --ink-3: #767684;
-  --ink-4: #44454f;
+  /* ink-3/ink-4 are brightened from the original #767684/#44454f: at the 9.5-13px sizes they're used
+     at, the originals measured 4.1-4.5:1 and 1.9-2.1:1 against the panel backgrounds -- both below
+     WCAG AA's 4.5:1 floor for normal text. These clear >=4.6:1 against every background they sit on. */
+  --ink-3: #888898;
+  --ink-4: #7d7f91;
 
   --bid: #34d399;
   --bid-bar: rgba(52, 211, 153, 0.14);
@@ -199,6 +202,7 @@ a:hover {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  margin: 0;
   padding: 9px 14px;
   border-bottom: 1px solid var(--rule);
   font-size: 10px;

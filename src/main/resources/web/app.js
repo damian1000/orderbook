@@ -140,9 +140,12 @@
 
   function setSide(next) {
     side = next;
-    $("buy").classList.toggle("active", next === "BID");
-    $("sell").classList.toggle("active", next === "OFFER");
-    $("submit").className = `submit ${next === "BID" ? "buy" : "sell"}`;
+    const isBid = next === "BID";
+    $("buy").classList.toggle("active", isBid);
+    $("buy").setAttribute("aria-pressed", String(isBid));
+    $("sell").classList.toggle("active", !isBid);
+    $("sell").setAttribute("aria-pressed", String(!isBid));
+    $("submit").className = `submit ${isBid ? "buy" : "sell"}`;
     updateLabel();
   }
 

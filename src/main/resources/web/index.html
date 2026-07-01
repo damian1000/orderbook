@@ -15,7 +15,7 @@
   <body>
     <header class="topbar">
       <div class="brand">
-        <span class="mark">&#9670;</span> ORDER BOOK
+        <span class="mark" aria-hidden="true">&#9670;</span> ORDER BOOK
         <span class="eyebrow">price-time priority matching engine</span>
       </div>
       <div class="status">
@@ -45,10 +45,10 @@
     </div>
 
     <main class="grid">
-      <section class="panel book">
-        <div class="phead">
+      <section class="panel book" aria-labelledby="book-heading">
+        <h2 class="phead" id="book-heading">
           Order Book <span class="sub">cumulative depth</span>
-        </div>
+        </h2>
         <div class="ladder-head">
           <span>Price</span><span>Size</span><span>Total</span>
         </div>
@@ -62,13 +62,25 @@
       </section>
 
       <aside class="side">
-        <section class="panel ticket">
-          <div class="phead">New Order</div>
-          <div class="seg">
-            <button id="buy" class="seg-btn buy active" type="button">
+        <section class="panel ticket" aria-labelledby="ticket-heading">
+          <h2 class="phead" id="ticket-heading">New Order</h2>
+          <div class="seg" role="group" aria-label="Order side">
+            <button
+              id="buy"
+              class="seg-btn buy active"
+              type="button"
+              aria-pressed="true"
+            >
               Buy
             </button>
-            <button id="sell" class="seg-btn sell" type="button">Sell</button>
+            <button
+              id="sell"
+              class="seg-btn sell"
+              type="button"
+              aria-pressed="false"
+            >
+              Sell
+            </button>
           </div>
           <label
             >Limit Price<input
@@ -87,11 +99,16 @@
           <button id="submit" class="submit buy" type="button">
             Buy 10 @ 101.00
           </button>
-          <div id="result" class="result"></div>
+          <div
+            id="result"
+            class="result"
+            role="status"
+            aria-live="polite"
+          ></div>
         </section>
 
-        <section class="panel tape">
-          <div class="phead">Trade Tape</div>
+        <section class="panel tape" aria-labelledby="tape-heading">
+          <h2 class="phead" id="tape-heading">Trade Tape</h2>
           <div class="tape-head">
             <span>Time</span><span>Side</span><span>Price</span
             ><span>Size</span>
