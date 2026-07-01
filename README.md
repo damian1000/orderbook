@@ -1,4 +1,4 @@
-# Kotlin Order Book
+# Order Book
 
 [![CI](https://github.com/damian1000/orderbook/actions/workflows/ci.yml/badge.svg)](https://github.com/damian1000/orderbook/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/damian1000/orderbook/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian1000/orderbook/actions/workflows/codeql.yml)
