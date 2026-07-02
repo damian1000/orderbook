@@ -1,5 +1,6 @@
 package io.github.damian1000.orderbook.bench
 
+import io.github.damian1000.orderbook.book.DisruptorOrderBook
 import io.github.damian1000.orderbook.book.LockingOrderBook
 import io.github.damian1000.orderbook.book.OrderBook
 import io.github.damian1000.orderbook.book.SingleWriterOrderBook
@@ -31,7 +32,7 @@ open class OrderBookBenchmark {
     @Param("50")
     var priceLevels: Int = 0
 
-    @Param("lock", "single-writer")
+    @Param("lock", "single-writer", "disruptor")
     var impl: String = ""
 
     private lateinit var book: OrderBook
@@ -44,6 +45,7 @@ open class OrderBookBenchmark {
             when (impl) {
                 "lock" -> LockingOrderBook()
                 "single-writer" -> SingleWriterOrderBook()
+                "disruptor" -> DisruptorOrderBook()
                 else -> error("unknown impl: $impl")
             }
         nextId.set(0)

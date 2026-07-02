@@ -1,5 +1,6 @@
 package io.github.damian1000.orderbook.bench
 
+import io.github.damian1000.orderbook.book.DisruptorOrderBook
 import io.github.damian1000.orderbook.book.LockingOrderBook
 import io.github.damian1000.orderbook.book.OrderBook
 import io.github.damian1000.orderbook.book.SingleWriterOrderBook
@@ -21,16 +22,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Multi-threaded, contended head-to-head between the lock-based [LockingOrderBook]
- * and the [SingleWriterOrderBook]. Throughput (ops/ms, higher is better) with a
- * shared book hammered by [Threads] worker threads — this is the regime the
- * single-threaded [OrderBookBenchmark] cannot show.
+ * Multi-threaded, contended head-to-head between the lock-based [LockingOrderBook], the
+ * blocking-queue [SingleWriterOrderBook], and the ring-buffer [DisruptorOrderBook]. Throughput
+ * (ops/ms, higher is better) with a shared book hammered by [Threads] worker threads — this is the
+ * regime the single-threaded [OrderBookBenchmark] cannot show.
  *
  * Expectations the numbers test:
- * - **writeHeavy**: writes serialise either way; the question is whether the
- *   lock's contention overhead costs more than the single-writer hand-off.
- * - **readHeavy**: the read/write lock lets reads run concurrently, so the lock
- *   should scale where the single writer (which serialises everything) cannot.
+ * - **writeHeavy**: writes serialise either way; the question is whether the lock's contention
+ *   overhead, or a blocking-queue hand-off, costs more than the Disruptor's busy-spin hand-off.
+ * - **readHeavy**: the read/write lock lets reads run concurrently, so the lock should scale where
+ *   the two single-writer designs (which serialise everything) cannot.
  * - **mixed**: mostly reads with occasional writes — closest to a real feed.
  */
 @State(Scope.Benchmark)
@@ -38,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @Threads(8)
 open class ContendedOrderBookBenchmark {
-    @Param("lock", "single-writer")
+    @Param("lock", "single-writer", "disruptor")
     var impl: String = ""
 
     @Param("10000")
@@ -56,6 +57,7 @@ open class ContendedOrderBookBenchmark {
             when (impl) {
                 "lock" -> LockingOrderBook()
                 "single-writer" -> SingleWriterOrderBook()
+                "disruptor" -> DisruptorOrderBook()
                 else -> error("unknown impl: $impl")
             }
         nextId.set(prepopulated.toLong())
