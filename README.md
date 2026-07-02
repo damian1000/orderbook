@@ -29,7 +29,8 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
   - **`sellOrders`**: `TreeMap<Price, ArrayDeque<Order>>`, natural ordering — lowest offer first.
   - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
   - Per-price queues are `ArrayDeque<Order>` — contiguous and cache-friendly, with `addLast` = arrival order = time priority and the head the next to fill.
-- **Two concurrency strategies wrap that core**, differing only in how they serialise access — `LockingOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
+- **`TickArrayOrderBook`** is a second core data structure, also with no concurrency control: price levels are addressed directly by tick offset from a fixed reference price into a pre-sized array, instead of a `TreeMap` lookup. It needs an explicit tick size and a bounded price band fixed at construction — see [Design decisions](#design-decisions) and [Complexity](#complexity).
+- **Two concurrency strategies wrap the `PlainOrderBook` core**, differing only in how they serialise access — `LockingOrderBook` (a read/write lock) and `SingleWriterOrderBook` (one owning thread). See [Concurrency](#concurrency).
 - **Time priority preserved on modify**: a size change mutates the resting order **in place** (the `ordersMap` and the queue hold the same `Order`), so it keeps its queue position rather than moving to the tail. This is a deliberate simplification: real venues keep queue priority on a size _decrease_ but send a size _increase_ to the back of the queue; here any size change retains its place.
 - Adding an existing id replaces the old visible order first, so duplicate ids do not leave stale orders at old price levels.
 
@@ -46,6 +47,19 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 
 The remove cost could be O(log P) instead of O(log P + N_p) by tracking each order's position in its `ArrayDeque` with an intrusive index map. Trade-off is more bookkeeping for a rarely-hot path.
 
+`TickArrayOrderBook` trades that profile for direct indexing, at the cost of a bounded, pre-sized price band (`B` = configured levels) instead of an unbounded, sparse one:
+
+| Operation                           | Cost                                   | Notes                                                                                                              |
+| ----------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `addOrder`                          | **O(1)**                               | direct array index; updates the best-price pointer only if this level is now the new best                          |
+| `removeOrder`                       | **O(N_p)**, worst case **O(B)**        | O(N_p) removing from the level's `ArrayDeque`; emptying the current best level scans toward the next populated one |
+| `modifyOrder`                       | **O(1)**                               | same in-place mutation as `PlainOrderBook`                                                                         |
+| `getPrice(side, 1)` / `bestResting` | **O(1)**                               | the best-price pointer is maintained, not searched                                                                 |
+| `getPrice(side, level)`             | **O(level)** best case, **O(B)** worst | walks populated levels from the pointer; a sparse book over a wide band costs more than a tree walk                |
+| `getOrders(side)`                   | **O(B + N)**                           | walks the whole band, not just the populated levels                                                                |
+
+The trade is real, not just theoretical: a wide, sparse band makes `getOrders` and deep `getPrice` levels slower than `PlainOrderBook`, not faster. See [Benchmarks](#benchmarks) for the measured best-price comparison.
+
 ## Concurrency
 
 Two interchangeable `OrderBook` implementations share the same `PlainOrderBook` core:
@@ -58,7 +72,7 @@ The [benchmarks](#benchmarks) compare the two under contention.
 ## Design decisions
 
 - **Prices are scaled `Long` ticks, not `BigDecimal`.** `BigDecimal` looks like the safe default — arbitrary precision, exact decimal arithmetic — but it's wrong for a hot path: every operation allocates, `compareTo`/`hashCode` walk variable-length internal state, and two numerically-equal `BigDecimal`s with different scale (`1.10` vs `1.100`) aren't `.equals()`-equal, which is a landmine for a map key. `Price`'s scaled `Long` (`SCALE = 8`) is a primitive comparison and an inline value class costs nothing beyond the `Long` itself; equal prices are always bit-identical. `BigDecimal` still exists exactly once, at the string parse/format boundary (`Price.of`, `toString`) — never on the matching path.
-- **Book storage is `TreeMap<Price, ArrayDeque<Order>>`, not `ConcurrentHashMap` or an array.** A hash map is rejected outright, not just deprioritised: `getPrice(side, 1)` needs the _best_ price, and a hash map has no ordering, so you'd need a full scan or a parallel sorted index — at which point you've built a worse tree by hand. The real alternative is a tick-indexed array: a bounded window of price levels addressed directly by tick offset from a reference price, trading `TreeMap`'s O(log P) for O(1) level access at the cost of a fixed price range and memory proportional to that range. `TreeMap` stays the general-purpose default because the book's price range is unbounded and typically sparse; the array-indexed variant is a deliberate follow-on for when the price band is known and bounded and tail latency matters more than generality.
+- **Book storage is `TreeMap<Price, ArrayDeque<Order>>`, not `ConcurrentHashMap` or an array.** A hash map is rejected outright, not just deprioritised: `getPrice(side, 1)` needs the _best_ price, and a hash map has no ordering, so you'd need a full scan or a parallel sorted index — at which point you've built a worse tree by hand. `TickArrayOrderBook` is the array alternative: a bounded window of price levels addressed directly by tick offset from a reference price, trading `TreeMap`'s O(log P) for O(1) best-price access at the cost of a fixed price band fixed at construction and memory proportional to that band (see [Complexity](#complexity) and [Benchmarks](#benchmarks) for the measured trade-off). `PlainOrderBook`'s `TreeMap` stays the general-purpose default because the book's price range is unbounded and typically sparse; the array-indexed variant is for when the price band is known and bounded and best-price tail latency matters more than generality or deep-level access.
 - **`LockingOrderBook` is the default, not `SingleWriterOrderBook`.** Single-writer is the textbook low-latency answer — no locks touch the data at all — which makes it tempting to default to on principle alone. The [benchmarks](#benchmarks) say otherwise on this hardware: the read/write lock wins on throughput across every workload, because its read lock lets concurrent queries run in parallel while the single writer serialises _reads_ through one thread the same as writes. What single-writer buys today is variance, not speed — rock-steady throughput under contention where the lock's is not — and it doesn't yet realise the classic single-writer win, because its hand-off still goes through a blocking queue and `Future.get()`, which relocates locking rather than removing it. `LockingOrderBook` stays the honest default until a Disruptor-based ring buffer (see [Concurrency](#concurrency)) actually removes that hand-off cost.
 
 ## Matching engine
@@ -130,6 +144,18 @@ End-to-end `MatchingEngine.submit()` — the path the live site runs — measure
 
 The hot path is near-allocation-free by design: the matcher peeks the top of book in **O(log P)** (`bestResting`) rather than materialising the side, a partial fill decrements the resting order's remaining size **in place** rather than replacing it, and the per-price queues are cache-friendly `ArrayDeque`s. The few hundred bytes per submit are the incoming order, the detached snapshot handed back to the caller, and — when it crosses — the emitted `Trade`. The p99.9 tail is occasional GC / JIT / safepoint activity, not the algorithm.
 
+### TreeMap vs array-indexed, best-price lookups
+
+`PlainOrderBook` (TreeMap) vs `TickArrayOrderBook` (array), both single-threaded and unwrapped — a data-structure comparison, not a concurrency one. Same population as the tables above: 10,000 orders, 50 price levels, `SampleTime`.
+
+| Operation (ns/op)               | `treemap` p50 | p90 | p99 | p99.9 | `array` p50 | p90 | p99 | p99.9 |
+| ------------------------------- | ------------: | --: | --: | ----: | ----------: | --: | --: | ----: |
+| `bestResting(BID)`              |            ~0 | 100 | 100 |   200 |          ~0 | 100 | 100 |   200 |
+| `bestResting(OFFER)`            |            ~0 | 100 | 100 |   100 |          ~0 | 100 | 100 |   200 |
+| `addOrder` + `removeOrder` pair |           400 | 500 | 700 |  8677 |         400 | 500 | 700 |  6000 |
+
+The honest result, not the assumed one: at 50 price levels the two are statistically indistinguishable. `TreeMap.firstKey()` only walks ~6 tree nodes (`log2 50`) to find the best price, which is already too cheap for the array's O(1) pointer lookup to show a measurable edge — the win the design promises shows up as `P` grows, not at this depth. `TickArrayOrderBook`'s payoff here is upfront-bounded memory and direct indexing, not a demonstrated latency win over `TreeMap` on a book this shallow; see [Design decisions](#design-decisions) for why it's kept as a second option rather than a replacement.
+
 Reproduce:
 
 ```bash
@@ -137,6 +163,7 @@ Reproduce:
 java -jar build/libs/orderbook-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
 java -jar build/libs/orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=lock -f 1
 java -jar build/libs/orderbook-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
+java -jar build/libs/orderbook-1.0.0-jmh.jar TickArrayOrderBookBenchmark -f 1 -wi 3 -i 5 -w 2s -r 2s
 ```
 
 ## Use it
