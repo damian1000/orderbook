@@ -119,6 +119,16 @@
     renderTape(snapshot);
   }
 
+  // Snapshots can arrive out of order (a submit response racing an SSE frame); never let an
+  // older one overwrite a newer one.
+  let lastTs = 0;
+
+  function renderIfFresh(snapshot) {
+    if (snapshot.ts < lastTs) return;
+    lastTs = snapshot.ts;
+    render(snapshot);
+  }
+
   // --- Connection indicator ----------------------------------------------
   function setConnected(on) {
     const label = on ? "live" : "offline";
@@ -153,14 +163,14 @@
     const query = `side=${side}&price=${encodeURIComponent($("price").value)}&size=${encodeURIComponent($("size").value)}`;
     const result = $("result");
     try {
-      const response = await fetch(`/api/order?${query}`);
+      const response = await fetch(`/api/order?${query}`, { method: "POST" });
       const data = await response.json();
       if (data.error) {
         result.textContent = `✕ ${data.error}`;
         result.className = "result err";
         return;
       }
-      render(data);
+      renderIfFresh(data);
       result.textContent =
         data.matched > 0
           ? `✓ ${data.matched} fill${data.matched > 1 ? "s" : ""}`
@@ -192,7 +202,7 @@
     lastEventAt = Date.now();
     events += 1;
     $("msgs").textContent = events;
-    render(JSON.parse(e.data));
+    renderIfFresh(JSON.parse(e.data));
   };
   stream.onopen = () => setConnected(true);
   stream.onerror = () => setConnected(false);

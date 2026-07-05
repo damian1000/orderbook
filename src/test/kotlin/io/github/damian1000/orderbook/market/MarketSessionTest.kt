@@ -3,6 +3,7 @@ package io.github.damian1000.orderbook.market
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -60,6 +61,17 @@ class MarketSessionTest {
 
             assertTrue(outcome.snapshot.asks.isNotEmpty(), "offer side should be replenished from the seed")
             assertEquals(listOf(Price.of("101.00")), outcome.snapshot.asks.map { it.price })
+        }
+    }
+
+    @Test
+    fun `an invalid order surfaces the validation error itself, not a wrapped ExecutionException`() {
+        session().use { session ->
+            val thrown =
+                assertThrows(IllegalArgumentException::class.java) {
+                    session.submit(Side.BID, Price.of("100.00"), 0)
+                }
+            assertTrue(thrown.message!!.contains("size"), "expected Order's own message, got: ${thrown.message}")
         }
     }
 

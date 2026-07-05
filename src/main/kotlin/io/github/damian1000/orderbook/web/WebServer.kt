@@ -14,6 +14,9 @@ import java.util.concurrent.Executors
  * HTTP transport for a [Market]: serves the static UI, the JSON API, and live SSE updates via a
  * [Broadcaster]. Plumbing only — book behaviour lives in the market layer, rendering in the view
  * layer. JDK [HttpServer] on a cached pool, which serves the long-lived SSE streams.
+ *
+ * Reads are GET; `/api/order` mutates the book, so it is POST-only — a GET that changes state
+ * would be prefetchable/cacheable. Invalid input maps to a 400 with a JSON `error` body.
  */
 class WebServer(
     private val session: Market,
@@ -21,25 +24,35 @@ class WebServer(
     private val broadcaster: Broadcaster,
     private val port: Int,
 ) {
+    private lateinit var server: HttpServer
+
+    /** Binds and starts serving; requesting port 0 binds an ephemeral port (see [boundPort]). */
     fun start() {
-        val server = HttpServer.create(InetSocketAddress(port), 0)
+        server = HttpServer.create(InetSocketAddress(port), 0)
         server.executor = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
         server.createContext("/", ::route)
         broadcaster.startHeartbeat()
         server.start()
-        println("Order book server listening on :$port")
+        println("Order book server listening on :$boundPort")
+    }
+
+    /** The port actually bound — differs from the requested one when 0 (ephemeral) was asked for. */
+    val boundPort: Int get() = server.address.port
+
+    fun stop() {
+        server.stop(0)
     }
 
     private fun route(exchange: HttpExchange) {
         try {
             when (exchange.requestURI.path) {
-                "/healthz" -> respond(exchange, 200, "text/plain", "ok")
-                "/" -> respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml)
-                "/app.css" -> respond(exchange, 200, "text/css; charset=utf-8", assets.appCss)
-                "/app.js" -> respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs)
-                "/api/state" -> respond(exchange, 200, "application/json", session.snapshot().toJson())
-                "/api/order" -> respond(exchange, 200, "application/json", submit(exchange))
-                "/api/stream" -> broadcaster.stream(exchange, session.snapshot().toJson())
+                "/healthz" -> get(exchange) { respond(exchange, 200, "text/plain", "ok") }
+                "/" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml) }
+                "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
+                "/app.js" -> get(exchange) { respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs) }
+                "/api/state" -> get(exchange) { respond(exchange, 200, "application/json", session.snapshot().toJson()) }
+                "/api/order" -> post(exchange) { respond(exchange, 200, "application/json", submit(exchange)) }
+                "/api/stream" -> get(exchange) { broadcaster.stream(exchange, session.snapshot().toJson()) }
                 else -> respond(exchange, 404, "text/plain", "not found")
             }
         } catch (e: IllegalArgumentException) {
@@ -50,8 +63,8 @@ class WebServer(
     private fun submit(exchange: HttpExchange): String {
         val params = queryParams(exchange.requestURI.rawQuery)
         val side = parseSide(params["side"])
-        val price = Price.of(params["price"] ?: error("price required"))
-        val size = (params["size"] ?: error("size required")).toLong()
+        val price = parsePrice(params["price"])
+        val size = parseSize(params["size"])
 
         val outcome = session.submit(side, price, size)
         val json = outcome.snapshot.toJson()
@@ -59,7 +72,53 @@ class WebServer(
         return """{"matched":${outcome.matched},${json.drop(1)}"""
     }
 
-    private fun parseSide(raw: String?): Side = if (raw.equals("BID", true) || raw.equals("BUY", true)) Side.BID else Side.OFFER
+    private fun parseSide(raw: String?): Side =
+        when {
+            raw.equals("BID", true) || raw.equals("BUY", true) -> Side.BID
+            raw.equals("OFFER", true) || raw.equals("SELL", true) -> Side.OFFER
+            else -> throw IllegalArgumentException("side must be BID/BUY or OFFER/SELL, got '${raw ?: ""}'")
+        }
+
+    // Price.of signals over-precision/overflow with ArithmeticException; remap it so every invalid
+    // input reaches the caller as the one exception type route() turns into a 400.
+    private fun parsePrice(raw: String?): Price {
+        val text = raw ?: throw IllegalArgumentException("price required")
+        return try {
+            Price.of(text)
+        } catch (e: NumberFormatException) {
+            throw IllegalArgumentException("price is not a valid decimal: '$text'")
+        } catch (e: ArithmeticException) {
+            throw IllegalArgumentException("price must fit ${Price.SCALE} decimal places without overflow: '$text'")
+        }
+    }
+
+    private fun parseSize(raw: String?): Long {
+        val text = raw ?: throw IllegalArgumentException("size required")
+        return text.toLongOrNull() ?: throw IllegalArgumentException("size is not a valid integer: '$text'")
+    }
+
+    private inline fun get(
+        exchange: HttpExchange,
+        handler: () -> Unit,
+    ) = allow(exchange, "GET", handler)
+
+    private inline fun post(
+        exchange: HttpExchange,
+        handler: () -> Unit,
+    ) = allow(exchange, "POST", handler)
+
+    private inline fun allow(
+        exchange: HttpExchange,
+        method: String,
+        handler: () -> Unit,
+    ) {
+        if (exchange.requestMethod == method) {
+            handler()
+        } else {
+            exchange.responseHeaders.add("Allow", method)
+            respond(exchange, 405, "text/plain", "method not allowed")
+        }
+    }
 
     private fun queryParams(raw: String?): Map<String, String> =
         (raw ?: "").split("&").filter { it.contains("=") }.associate {

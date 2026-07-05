@@ -8,6 +8,7 @@ import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import io.github.damian1000.orderbook.view.MarketSnapshot
 import io.github.damian1000.orderbook.view.TapeEntry
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
@@ -77,12 +78,19 @@ class MarketSession(
         MarketSnapshot.of(book.getOrders(Side.BID), book.getOrders(Side.OFFER), tape.toList(), now)
 
     private fun replenishEmptySides() {
-        if (book.getOrders(Side.OFFER).isEmpty()) place(seed.forSide(Side.OFFER))
-        if (book.getOrders(Side.BID).isEmpty()) place(seed.forSide(Side.BID))
+        if (book.bestResting(Side.OFFER) == null) place(seed.forSide(Side.OFFER))
+        if (book.bestResting(Side.BID) == null) place(seed.forSide(Side.BID))
     }
 
     private fun place(orders: List<SeedOrder>) =
         orders.forEach { book.addOrder(Order(nextId.getAndIncrement(), it.price, it.side, it.size)) }
 
-    private fun <T> onWriter(block: () -> T): T = writer.submit(block).get()
+    // Unwrap so callers see the block's own exception (e.g. Order's size validation), not a
+    // wrapped ExecutionException the web layer's error mapping can't recognise.
+    private fun <T> onWriter(block: () -> T): T =
+        try {
+            writer.submit(block).get()
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
 }

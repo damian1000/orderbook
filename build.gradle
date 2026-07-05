@@ -48,11 +48,10 @@ test {
     finalizedBy jacocoTestReport
 }
 
-// The web transport (WebServer's main() runs an HttpServer) is an application entry point, excluded
-// from coverage like a Spring Boot Application / CLI MainKt. Its logic is deliberately kept thin:
-// the render-ready projection + JSON live in the io.github.damian1000.orderbook.view package, which
-// is fully unit-tested and NOT excluded. The matching engine and book are likewise fully tested.
-def coverageExclusions = ['**/web/**']
+// Only the process entry point (WebServerKt — main() binds the real port and blocks) is excluded,
+// like a Spring Boot Application / CLI MainKt. The rest of the web layer — routing, error mapping,
+// SSE fan-out, asset loading — is exercised against a loopback HttpServer and counted.
+def coverageExclusions = ['**/web/WebServerKt.class']
 
 jacocoTestReport {
     dependsOn test

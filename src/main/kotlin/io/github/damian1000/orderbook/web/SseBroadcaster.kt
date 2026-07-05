@@ -3,9 +3,9 @@ package io.github.damian1000.orderbook.web
 import com.sun.net.httpserver.HttpExchange
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /** Pushes live state to browsers. SSE today ([SseBroadcaster]); a WebSocket impl would satisfy it unchanged. */
@@ -21,14 +21,18 @@ interface Broadcaster {
 }
 
 /**
- * SSE fan-out: each client drains its own queue so a slow one can't block the others; a heartbeat
- * keeps connections alive through proxies and reaps any client whose write has started failing.
+ * SSE fan-out: each client drains its own bounded queue so a slow one can't block the others or
+ * grow the heap; a heartbeat keeps connections alive through proxies and reaps any client whose
+ * write has started failing.
  */
-class SseBroadcaster :
-    Broadcaster,
+class SseBroadcaster(
+    private val queueCapacity: Int = 64,
+) : Broadcaster,
     AutoCloseable {
-    private class Client {
-        val queue = LinkedBlockingQueue<String>()
+    private class Client(
+        capacity: Int,
+    ) {
+        val queue = ArrayBlockingQueue<String>(capacity)
     }
 
     private val clients = CopyOnWriteArrayList<Client>()
@@ -49,7 +53,7 @@ class SseBroadcaster :
         exchange.responseHeaders.add("Connection", "keep-alive")
         exchange.sendResponseHeaders(200, 0)
         val out = exchange.responseBody
-        val client = Client()
+        val client = Client(queueCapacity)
         try {
             write(out, "retry: 3000\n\n" + asEvent(initialJson))
             clients.add(client)
@@ -68,7 +72,17 @@ class SseBroadcaster :
         heartbeat.shutdownNow()
     }
 
-    private fun enqueue(frame: String) = clients.forEach { it.queue.offer(frame) }
+    /** Currently-registered clients — lets tests await registration instead of sleeping. */
+    internal fun clientCount(): Int = clients.size
+
+    // Backpressure by dropping the *oldest* frame when a client's queue is full: every frame is a
+    // complete snapshot, so a stalled client that recovers renders the latest state, not a backlog.
+    private fun enqueue(frame: String) =
+        clients.forEach { client ->
+            while (!client.queue.offer(frame)) {
+                client.queue.poll()
+            }
+        }
 
     private fun asEvent(json: String) = "data: $json\n\n"
 

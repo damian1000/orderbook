@@ -35,8 +35,10 @@ class TickArrayOrderBook(
     private var offerPopulated = 0
 
     override fun addOrder(order: Order) {
-        ordersMap[order.id]?.let { removeOrderFromBook(it) }
+        // Validate the new price *before* touching state: indexOf throws for an off-grid or
+        // out-of-band price, and a rejected add must not have already removed the old order.
         val index = indexOf(order.price)
+        ordersMap[order.id]?.let { removeOrderFromBook(it) }
         val level = levelsFor(order.side)[index]
         val wasEmpty = level.isEmpty()
         level.addLast(order)

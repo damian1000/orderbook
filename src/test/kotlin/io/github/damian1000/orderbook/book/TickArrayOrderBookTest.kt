@@ -52,6 +52,22 @@ class TickArrayOrderBookTest {
     }
 
     @Test
+    fun rejectedReplacementLeavesTheExistingOrderIntact() {
+        val book = TickArrayOrderBook(Price.of("0"), unit, 10)
+        book.addOrder(Order(1L, Price.of("5"), Side.BID, 5))
+
+        // Same id, invalid new price: the add must fail atomically, not half-remove the old order.
+        assertThrows(IllegalArgumentException::class.java) {
+            book.addOrder(Order(1L, Price.of("99"), Side.BID, 7))
+        }
+
+        assertEquals(Price.of("5"), book.bestResting(Side.BID)?.price)
+        assertEquals(5L, book.bestResting(Side.BID)?.size)
+        assertEquals(true, book.removeOrder(1L))
+        assertNull(book.bestResting(Side.BID))
+    }
+
+    @Test
     fun emptyingBestBidScansPastGapsToNextPopulatedLevel() {
         val book = TickArrayOrderBook(Price.of("0"), unit, 20)
         book.addOrder(Order(1L, Price.of("5"), Side.BID, 5))
