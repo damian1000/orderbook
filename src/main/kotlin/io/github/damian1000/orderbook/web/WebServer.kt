@@ -8,6 +8,7 @@ import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
@@ -25,11 +26,13 @@ class WebServer(
     private val port: Int,
 ) {
     private lateinit var server: HttpServer
+    private lateinit var executor: ExecutorService
 
     /** Binds and starts serving; requesting port 0 binds an ephemeral port (see [boundPort]). */
     fun start() {
         server = HttpServer.create(InetSocketAddress(port), 0)
-        server.executor = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
+        executor = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
+        server.executor = executor
         server.createContext("/", ::route)
         broadcaster.startHeartbeat()
         server.start()
@@ -39,8 +42,10 @@ class WebServer(
     /** The port actually bound — differs from the requested one when 0 (ephemeral) was asked for. */
     val boundPort: Int get() = server.address.port
 
+    /** Stops accepting connections and shuts down the request pool this server created. */
     fun stop() {
         server.stop(0)
+        executor.shutdownNow()
     }
 
     private fun route(exchange: HttpExchange) {
@@ -143,5 +148,17 @@ class WebServer(
 
 fun main() {
     val port = (System.getenv("PORT") ?: "8080").toInt()
-    WebServer(MarketSession(), WebAssets.load(), SseBroadcaster(), port).start()
+    val session = MarketSession()
+    val broadcaster = SseBroadcaster()
+    val server = WebServer(session, WebAssets.load(), broadcaster, port)
+    // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
+    // then the broadcaster's heartbeat and the session's writer thread are released.
+    Runtime.getRuntime().addShutdownHook(
+        Thread {
+            server.stop()
+            broadcaster.close()
+            session.close()
+        },
+    )
+    server.start()
 }

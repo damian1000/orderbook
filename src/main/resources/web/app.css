@@ -28,7 +28,9 @@
   --ask: #f87171;
   --ask-bar: rgba(248, 113, 113, 0.14);
 
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* System monospace stack: the page stays fully self-hosted — no third-party font CDN. */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Cascadia Mono", monospace;
 }
 
 * {
