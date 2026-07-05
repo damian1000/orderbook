@@ -170,7 +170,7 @@ class TickArrayOrderBook(
 
     // Walks from the best-price pointer outward, skipping empty slots, to the level-th populated
     // one. O(1) best case (level == 1); worst case O(levels) for a deep level in a sparse band —
-    // see the README's Complexity section for the honest trade-off against PlainOrderBook.
+    // see the README's Complexity section for the trade-off against PlainOrderBook.
     private fun indexAtLevel(
         side: Side,
         level: Int,

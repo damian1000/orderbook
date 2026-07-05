@@ -25,6 +25,6 @@ A systemd-managed JVM behind Caddy, on a 1 GB micro VM:
 - **[`Caddyfile`](Caddyfile)** reverse-proxies `localhost:8080` and auto-provisions a
   Let's Encrypt certificate. `flush_interval -1` keeps SSE streams unbuffered.
 
-systemd + Caddy rather than Docker is a deliberate fit for the 1 GB box — the Docker daemon
-is too heavy for the memory budget. Both unit and proxy config are version-controlled here
-so the host is reproducible, not hand-edited.
+systemd + Caddy rather than Docker: the Docker daemon is too heavy for the 1 GB box's
+memory budget. Both unit and proxy config are version-controlled here so the host is
+reproducible rather than hand-edited.
