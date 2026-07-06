@@ -36,7 +36,7 @@ repositories {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation 'com.lmax:disruptor:4.0.0'
-    // Fills egress only — Kafka attaches at the edge (KafkaFillPublisher), never the match path.
+    // Egress only — Kafka attaches at the edge (KafkaMarketEgress), never the match path.
     implementation 'org.apache.kafka:kafka-clients:4.3.1'
     // kafka-clients logs via slf4j; a binding routes producer warnings to stderr -> journalctl.
     runtimeOnly 'org.slf4j:slf4j-simple:2.0.18'
@@ -123,9 +123,10 @@ jmh {
     fork = 1
     warmupIterations = 3
     iterations = 5
-    // Per-class @BenchmarkMode wins (SampleTime for the submit() tail, Throughput for the contended
-    // run); this is only the default for any benchmark that doesn't set its own.
-    benchmarkMode = ['avgt']
+    // No benchmarkMode here: the plugin passes it as -bm, which overrides every class's
+    // @BenchmarkMode annotation (it is not a fallback default). Each benchmark declares its
+    // own mode — SampleTime for the tail-latency runs, Throughput for the contended run,
+    // AverageTime for the sub-µs raw book ops.
     timeUnit = 'us'
     profilers = ['gc'] // allocations/op (gc.alloc.rate.norm) + GC pause stats on every benchmark
     resultFormat = 'JSON'
