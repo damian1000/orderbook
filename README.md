@@ -91,6 +91,33 @@ val fills = engine.submit(Order(2L, Price.of("101"), Side.BID, 8))
 
 Scope: plain limit orders (cross, then rest the remainder). Richer types — market, IOC/FOK, stop, iceberg — build on this. The [live web front end](https://orderbook.damianhoward.com) wraps the engine in a dependency-free JDK `HttpServer`, pushing book and tape updates to the browser over Server-Sent Events.
 
+## Kafka egress — fills
+
+The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill crosses a seam (`FillListener`) that costs the writer a single bounded-queue enqueue, and a dedicated egress thread drains the queue into a `KafkaProducer`. If the queue fills — broker down, network stalled — the oldest pending fill is dropped and counted rather than blocking the writer, so the live book keeps serving while the `dropped` counter records the gap. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
+
+Records on `orderbook.fills` are versioned JSON keyed by symbol, so per-symbol ordering holds when multiple instruments exist downstream:
+
+```json
+{
+  "v": 1,
+  "symbol": "SIM",
+  "price": "101.00000000",
+  "size": 5,
+  "makerOrderId": 7,
+  "takerOrderId": 9,
+  "aggressor": "BID",
+  "ts": 1000
+}
+```
+
+The egress is off unless the environment wires it:
+
+- `KAFKA_BOOTSTRAP_SERVERS` — setting it enables the egress; unset, no producer exists
+- `KAFKA_FILLS_TOPIC` — topic override (default `orderbook.fills`)
+- `ORDERBOOK_SYMBOL` — record key (default `SIM`)
+
+`KafkaFillEgressIntegrationTest` exercises the path against a real broker (Testcontainers) on every CI run: fills submitted through a live `MarketSession` are consumed back off the topic. `MarketSessionBenchmark` measures `submit()` with the egress attached vs absent; the producer I/O runs on the egress thread, so the submit path pays only the enqueue.
+
 ## Run
 
 ```bash
@@ -198,8 +225,10 @@ price levels on this side", distinct from a legitimate price of zero.
 
 - Kotlin 2.3.21 (JVM target 25)
 - Java 25 toolchain
+- Kafka clients 4.3 (fills egress)
 - JUnit Jupiter 6.1
 - Hamcrest 3
+- Testcontainers 1.21 (real-broker egress test, tests only)
 - Gradle 9.6.0
 
 The core is a pure data-structure-and-algorithms exercise; a thin JDK-`HttpServer` front end (no web framework, no DB) wraps the matching engine for the live order book above.

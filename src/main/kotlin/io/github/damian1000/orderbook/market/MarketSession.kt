@@ -40,6 +40,7 @@ class MarketSession(
     private val seed: SeedLiquidity = SeedLiquidity.default(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val tapeLimit: Int = 30,
+    private val fills: FillListener = FillListener.NONE,
 ) : Market,
     AutoCloseable {
     private val book = PlainOrderBook()
@@ -63,6 +64,7 @@ class MarketSession(
             trades.forEach { trade ->
                 tape.addFirst(TapeEntry(trade.price, trade.size, trade.incomingSide, now))
                 if (tape.size > tapeLimit) tape.removeLast()
+                fills.onFill(trade, now)
             }
             replenishEmptySides()
             SubmitOutcome(trades.size, snapshotAt(now))

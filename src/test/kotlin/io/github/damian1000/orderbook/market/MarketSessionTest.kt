@@ -2,6 +2,7 @@ package io.github.damian1000.orderbook.market
 
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
+import io.github.damian1000.orderbook.model.Trade
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -73,6 +74,22 @@ class MarketSessionTest {
                 }
             assertTrue(thrown.message!!.contains("size"), "expected Order's own message, got: ${thrown.message}")
         }
+    }
+
+    @Test
+    fun `every fill reaches the fill listener with the tape timestamp`() {
+        val fills = mutableListOf<Pair<Trade, Long>>()
+        val listener = FillListener { trade, ts -> fills.add(trade to ts) }
+        MarketSession(seed = seed, clock = { 1_000L }, fills = listener).use { session ->
+            session.submit(Side.BID, Price.of("101.00"), 5)
+            session.submit(Side.BID, Price.of("98.00"), 3)
+        }
+
+        val (trade, ts) = fills.single()
+        assertEquals(Price.of("101.00"), trade.price)
+        assertEquals(5L, trade.size)
+        assertEquals(Side.BID, trade.incomingSide)
+        assertEquals(1_000L, ts)
     }
 
     @Test

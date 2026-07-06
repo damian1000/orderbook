@@ -36,11 +36,18 @@ repositories {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation 'com.lmax:disruptor:4.0.0'
+    // Fills egress only — Kafka attaches at the edge (KafkaFillPublisher), never the match path.
+    implementation 'org.apache.kafka:kafka-clients:4.3.1'
+    // kafka-clients logs via slf4j; a binding routes producer warnings to stderr -> journalctl.
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.18'
 
     testImplementation platform("org.junit:junit-bom:6.1.1")
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testImplementation 'org.hamcrest:hamcrest:3.0'
+    // Real-broker integration test for the fills egress; skipped where Docker is absent, runs in CI.
+    testImplementation 'org.testcontainers:junit-jupiter:1.21.4'
+    testImplementation 'org.testcontainers:kafka:1.21.4'
 }
 
 test {

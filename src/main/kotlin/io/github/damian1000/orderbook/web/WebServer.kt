@@ -2,6 +2,8 @@ package io.github.damian1000.orderbook.web
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import io.github.damian1000.orderbook.kafka.KafkaFillPublisher
+import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.model.Price
@@ -148,16 +150,28 @@ class WebServer(
 
 fun main() {
     val port = (System.getenv("PORT") ?: "8080").toInt()
-    val session = MarketSession()
+    // Kafka egress is opt-in by environment: unset means no producer exists at all and the
+    // server runs exactly as before. The fills topic is the seam downstream consumers read.
+    val fillPublisher =
+        System.getenv("KAFKA_BOOTSTRAP_SERVERS")?.let { bootstrap ->
+            KafkaFillPublisher.create(
+                bootstrapServers = bootstrap,
+                topic = System.getenv("KAFKA_FILLS_TOPIC") ?: KafkaFillPublisher.DEFAULT_TOPIC,
+                symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaFillPublisher.DEFAULT_SYMBOL,
+            )
+        }
+    val session = MarketSession(fills = fillPublisher ?: FillListener.NONE)
     val broadcaster = SseBroadcaster()
     val server = WebServer(session, WebAssets.load(), broadcaster, port)
     // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
-    // then the broadcaster's heartbeat and the session's writer thread are released.
+    // then the broadcaster's heartbeat and the session's writer thread are released, and the
+    // egress flushes what it holds before the producer closes.
     Runtime.getRuntime().addShutdownHook(
         Thread {
             server.stop()
             broadcaster.close()
             session.close()
+            fillPublisher?.close()
         },
     )
     server.start()
