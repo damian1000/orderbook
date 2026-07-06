@@ -1,9 +1,11 @@
 package io.github.damian1000.orderbook.kafka
 
 import io.github.damian1000.orderbook.market.CommandListener
+import io.github.damian1000.orderbook.market.DepthListener
 import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.SubmitCommand
 import io.github.damian1000.orderbook.model.Trade
+import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.Producer
 import org.apache.kafka.clients.producer.ProducerConfig
@@ -17,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Kafka egress for the market's event stream: fills on one topic, the accepted-command log on
- * another. Never on the match path — the listener callbacks run on the market's writer thread
+ * a second, and the book's latest depth on a third. Never on the match path — the listener callbacks run on the market's writer thread
  * and only enqueue; a dedicated egress thread drains the queue into the [Producer]. When the
  * queue is full — broker down, network slow — the oldest pending event is dropped and counted
  * rather than blocking the writer: the live book must not degrade because the egress is sick.
@@ -25,17 +27,20 @@ import java.util.concurrent.atomic.AtomicLong
  * Records are versioned JSON keyed by symbol, so per-symbol ordering holds once multiple
  * instruments exist. Delivery is at-least-once while the broker is reachable; the [dropped]
  * counter is the honest record of any gap. A gap matters differently per topic: the tape is a
- * rebuildable view, but a command log with a hole no longer replays to the live book's state —
- * the counter is what says whether a log is replayable.
+ * rebuildable view and each depth snapshot supersedes the last, but a command log with a hole
+ * no longer replays to the live book's state — the counter is what says whether a log is
+ * replayable.
  */
 class KafkaMarketEgress(
     private val producer: Producer<String, String>,
     private val fillsTopic: String = DEFAULT_FILLS_TOPIC,
     private val commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
+    private val l2Topic: String = DEFAULT_L2_TOPIC,
     private val symbol: String = DEFAULT_SYMBOL,
     queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
 ) : FillListener,
     CommandListener,
+    DepthListener,
     AutoCloseable {
     private sealed interface Pending
 
@@ -46,6 +51,10 @@ class KafkaMarketEgress(
 
     private data class PendingCommand(
         val command: SubmitCommand,
+    ) : Pending
+
+    private data class PendingDepth(
+        val snapshot: MarketSnapshot,
     ) : Pending
 
     private val queue = ArrayBlockingQueue<Pending>(queueCapacity)
@@ -78,6 +87,8 @@ class KafkaMarketEgress(
     ) = enqueue(PendingFill(trade, timeMillis))
 
     override fun onSubmit(command: SubmitCommand) = enqueue(PendingCommand(command))
+
+    override fun onDepth(snapshot: MarketSnapshot) = enqueue(PendingDepth(snapshot))
 
     private fun enqueue(event: Pending) {
         // Drop-oldest, never block: shedding the stalest event keeps the stream current and the
@@ -115,6 +126,7 @@ class KafkaMarketEgress(
             when (event) {
                 is PendingFill -> ProducerRecord(fillsTopic, symbol, fillJson(event))
                 is PendingCommand -> ProducerRecord(commandsTopic, symbol, commandJson(event.command))
+                is PendingDepth -> ProducerRecord(l2Topic, symbol, depthJson(event.snapshot))
             }
         try {
             producer.send(record) { _, exception ->
@@ -138,11 +150,15 @@ class KafkaMarketEgress(
         """{"v":1,"symbol":${quote(symbol)},"side":${quote(command.side.name)},""" +
             """"price":${quote(command.price.toString())},"size":${command.size},"ts":${command.timeMillis}}"""
 
+    // The book body comes from the view layer's serialisation; the egress adds only its envelope.
+    private fun depthJson(snapshot: MarketSnapshot): String = """{"v":1,"symbol":${quote(symbol)},""" + snapshot.depthJson().drop(1)
+
     private fun quote(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     companion object {
         const val DEFAULT_FILLS_TOPIC = "orderbook.fills"
         const val DEFAULT_COMMANDS_TOPIC = "orderbook.commands"
+        const val DEFAULT_L2_TOPIC = "orderbook.l2"
         const val DEFAULT_SYMBOL = "SIM"
         const val DEFAULT_QUEUE_CAPACITY = 4096
         private val CLOSE_TIMEOUT = Duration.ofSeconds(5)
@@ -154,6 +170,7 @@ class KafkaMarketEgress(
             bootstrapServers: String,
             fillsTopic: String = DEFAULT_FILLS_TOPIC,
             commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
+            l2Topic: String = DEFAULT_L2_TOPIC,
             symbol: String = DEFAULT_SYMBOL,
         ): KafkaMarketEgress {
             val props =
@@ -168,7 +185,7 @@ class KafkaMarketEgress(
                     put(ProducerConfig.BUFFER_MEMORY_CONFIG, 8L * 1024 * 1024)
                 }
             val producer = KafkaProducer(props, StringSerializer(), StringSerializer())
-            return KafkaMarketEgress(producer, fillsTopic, commandsTopic, symbol).also { it.start() }
+            return KafkaMarketEgress(producer, fillsTopic, commandsTopic, l2Topic, symbol).also { it.start() }
         }
     }
 }

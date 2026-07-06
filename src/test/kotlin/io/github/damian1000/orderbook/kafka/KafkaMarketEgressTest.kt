@@ -4,6 +4,8 @@ import io.github.damian1000.orderbook.market.SubmitCommand
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import io.github.damian1000.orderbook.model.Trade
+import io.github.damian1000.orderbook.view.DepthLevel
+import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.apache.kafka.clients.producer.MockProducer
 import org.apache.kafka.common.serialization.StringSerializer
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -20,6 +22,13 @@ class KafkaMarketEgressTest {
             incomingSide = Side.BID,
         )
     private val command = SubmitCommand(Side.BID, Price.of("101.00"), 5, 1_000L)
+    private val snapshot =
+        MarketSnapshot(
+            timeMillis = 1_000L,
+            bids = listOf(DepthLevel(Price.of("99.00"), 10, 10)),
+            asks = listOf(DepthLevel(Price.of("101.00"), 5, 5)),
+            tape = emptyList(),
+        )
 
     private fun producer(autoComplete: Boolean = true) = MockProducer(autoComplete, null, StringSerializer(), StringSerializer())
 
@@ -58,19 +67,37 @@ class KafkaMarketEgressTest {
     }
 
     @Test
-    fun `fills and commands interleave onto their own topics in submission order`() {
+    fun `publishes the latest depth as the view layer's book JSON in the egress envelope`() {
+        val producer = producer()
+        val egress = KafkaMarketEgress(producer)
+        egress.onDepth(snapshot)
+        egress.close()
+
+        val record = producer.history().single()
+        assertEquals("orderbook.l2", record.topic())
+        assertEquals("SIM", record.key())
+        assertEquals(
+            """{"v":1,"symbol":"SIM","ts":1000,"bids":[{"price":"99.00000000","size":10,"cumulative":10}],""" +
+                """"asks":[{"price":"101.00000000","size":5,"cumulative":5}]}""",
+            record.value(),
+        )
+    }
+
+    @Test
+    fun `events interleave onto their own topics in submission order`() {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
         egress.onSubmit(command)
         egress.onFill(trade, 1_000L)
+        egress.onDepth(snapshot)
         egress.onSubmit(command.copy(size = 3, timeMillis = 2_000L))
         egress.close()
 
         assertEquals(
-            listOf("orderbook.commands", "orderbook.fills", "orderbook.commands"),
+            listOf("orderbook.commands", "orderbook.fills", "orderbook.l2", "orderbook.commands"),
             producer.history().map { it.topic() },
         )
-        assertEquals(3, egress.published)
+        assertEquals(4, egress.published)
     }
 
     @Test

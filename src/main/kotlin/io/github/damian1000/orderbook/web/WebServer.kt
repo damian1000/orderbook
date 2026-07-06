@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
 import io.github.damian1000.orderbook.market.CommandListener
+import io.github.damian1000.orderbook.market.DepthListener
 import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
@@ -153,13 +154,15 @@ fun main() {
     val port = (System.getenv("PORT") ?: "8080").toInt()
     // Kafka egress is opt-in by environment: unset means no producer exists at all and the
     // server runs exactly as before. The fills topic is the seam downstream consumers read;
-    // the commands topic is the ordered log a fresh book can be replayed from.
+    // the commands topic is the ordered log a fresh book can be replayed from; the L2 topic
+    // carries the latest depth (each record supersedes the last — compact it broker-side).
     val egress =
         System.getenv("KAFKA_BOOTSTRAP_SERVERS")?.let { bootstrap ->
             KafkaMarketEgress.create(
                 bootstrapServers = bootstrap,
                 fillsTopic = System.getenv("KAFKA_FILLS_TOPIC") ?: KafkaMarketEgress.DEFAULT_FILLS_TOPIC,
                 commandsTopic = System.getenv("KAFKA_COMMANDS_TOPIC") ?: KafkaMarketEgress.DEFAULT_COMMANDS_TOPIC,
+                l2Topic = System.getenv("KAFKA_L2_TOPIC") ?: KafkaMarketEgress.DEFAULT_L2_TOPIC,
                 symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaMarketEgress.DEFAULT_SYMBOL,
             )
         }
@@ -167,6 +170,7 @@ fun main() {
         MarketSession(
             fills = egress ?: FillListener.NONE,
             commands = egress ?: CommandListener.NONE,
+            depth = egress ?: DepthListener.NONE,
         )
     val broadcaster = SseBroadcaster()
     val server = WebServer(session, WebAssets.load(), broadcaster, port)

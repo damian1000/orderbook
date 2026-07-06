@@ -93,7 +93,7 @@ Scope: plain limit orders (cross, then rest the remainder). Richer types — mar
 
 ## Kafka egress
 
-The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill and each accepted command crosses a seam (`FillListener` / `CommandListener`) that costs the writer a bounded-queue enqueue, and a dedicated egress thread (`KafkaMarketEgress`) drains the queue into one `KafkaProducer` across two topics. If the queue fills — broker down, network stalled — the oldest pending event is dropped and counted rather than blocking the writer, so the live book keeps serving while the `dropped` counter records the gap. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
+The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill, each accepted command, and each depth change crosses a seam (`FillListener` / `CommandListener` / `DepthListener`) that costs the writer a bounded-queue enqueue, and a dedicated egress thread (`KafkaMarketEgress`) drains the queue into one `KafkaProducer` across three topics. If the queue fills — broker down, network stalled — the oldest pending event is dropped and counted rather than blocking the writer, so the live book keeps serving while the `dropped` counter records the gap. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
 
 Records are versioned JSON keyed by symbol, so per-symbol ordering holds when multiple instruments exist downstream.
 
@@ -127,13 +127,21 @@ Records are versioned JSON keyed by symbol, so per-symbol ordering holds when mu
 
 The command log enables deterministic replay: seeding, replenishment, and order ids are all deterministic functions of the seed and the command sequence, so `replay(seed, commands)` rebuilds a fresh session whose snapshot equals the live one — asserted in CI by consuming the log back off a real broker and comparing books. A `dropped` count above zero is the signal a log is no longer replayable.
 
+**`orderbook.l2`** — the book's latest depth, published after every change: the seeded book once at startup, then one record per accepted submit, each carrying both sides' aggregated levels with cumulative totals (the same shape the front end renders, minus the tape):
+
+```json
+{ "v": 1, "symbol": "SIM", "ts": 1000, "bids": [{ "price": "99.00000000", "size": 10, "cumulative": 10 }], "asks": [...] }
+```
+
+L2 is snapshots, not deltas. The egress sheds the oldest event under pressure, and a delta stream cannot survive that — one shed delta corrupts every downstream book permanently — whereas each snapshot supersedes the last, so a drop costs staleness measured in one record, not correctness. Create the topic with `cleanup.policy=compact` and it behaves as a table: the newest record per symbol is the current book.
+
 The egress is off unless the environment wires it:
 
 - `KAFKA_BOOTSTRAP_SERVERS` — setting it enables the egress; unset, no producer exists
-- `KAFKA_FILLS_TOPIC` / `KAFKA_COMMANDS_TOPIC` — topic overrides (defaults `orderbook.fills`, `orderbook.commands`)
+- `KAFKA_FILLS_TOPIC` / `KAFKA_COMMANDS_TOPIC` / `KAFKA_L2_TOPIC` — topic overrides (defaults `orderbook.fills`, `orderbook.commands`, `orderbook.l2`)
 - `ORDERBOOK_SYMBOL` — record key (default `SIM`)
 
-`KafkaEgressIntegrationTest` exercises both topics against a real broker (Testcontainers) on every CI run. `MarketSessionBenchmark` measures `submit()` with the egress attached vs absent; the producer I/O runs on the egress thread, so the submit path pays only the enqueues.
+`KafkaEgressIntegrationTest` exercises all three topics against a real broker (Testcontainers) on every CI run. `MarketSessionBenchmark` measures `submit()` with the egress attached vs absent; the producer I/O runs on the egress thread, so the submit path pays only the enqueues.
 
 ## Run
 

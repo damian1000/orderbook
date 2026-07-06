@@ -31,10 +31,15 @@ data class MarketSnapshot(
     val tape: List<TapeEntry>,
 ) {
     fun toJson(): String {
+        val tapeJson = tape.joinToString(",", "[", "]", transform = ::tapeJson)
+        return depthJson().dropLast(1) + ""","tape":$tapeJson}"""
+    }
+
+    /** The book only — both sides' aggregated levels, no tape. What the L2 egress publishes. */
+    fun depthJson(): String {
         val bidsJson = bids.joinToString(",", "[", "]", transform = ::levelJson)
         val asksJson = asks.joinToString(",", "[", "]", transform = ::levelJson)
-        val tapeJson = tape.joinToString(",", "[", "]", transform = ::tapeJson)
-        return """{"ts":$timeMillis,"bids":$bidsJson,"asks":$asksJson,"tape":$tapeJson}"""
+        return """{"ts":$timeMillis,"bids":$bidsJson,"asks":$asksJson}"""
     }
 
     private fun levelJson(level: DepthLevel): String {

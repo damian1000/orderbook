@@ -3,6 +3,7 @@ package io.github.damian1000.orderbook.market
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import io.github.damian1000.orderbook.model.Trade
+import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -110,6 +111,18 @@ class MarketSessionTest {
             ),
             log,
         )
+    }
+
+    @Test
+    fun `depth snapshots arrive for the seeded book and after every accepted submit`() {
+        val depths = mutableListOf<MarketSnapshot>()
+        MarketSession(seed = seed, clock = { 1_000L }, depth = { depths.add(it) }).use { session ->
+            val outcome = session.submit(Side.BID, Price.of("98.00"), 3)
+
+            assertEquals(2, depths.size, "one for the seeded book, one for the submit")
+            assertEquals(listOf(Price.of("99.00")), depths.first().bids.map { it.price })
+            assertEquals(outcome.snapshot, depths.last())
+        }
     }
 
     @Test

@@ -48,7 +48,7 @@ class KafkaEgressIntegrationTest {
         val egress = KafkaMarketEgress.create(kafka.bootstrapServers)
         var now = 1_000L
         val live =
-            MarketSession(seed = seed, clock = { now }, fills = egress, commands = egress).use { session ->
+            MarketSession(seed = seed, clock = { now }, fills = egress, commands = egress, depth = egress).use { session ->
                 session.submit(Side.BID, Price.of("101.00"), 5)
                 now = 2_000L
                 session.submit(Side.OFFER, Price.of("100.50"), 4)
@@ -56,14 +56,15 @@ class KafkaEgressIntegrationTest {
                 session.submit(Side.BID, Price.of("100.50"), 2)
                 session.snapshot()
             }
-        // 3 commands + 2 fills (the 101 sweep and the partial at 100.50); the first send also
-        // waits out topic auto-creation, so wait for the acks rather than racing them.
+        // 3 commands + 2 fills (the 101 sweep and the partial at 100.50) + 4 depth snapshots
+        // (seeded book + one per submit); the first send also waits out topic auto-creation,
+        // so wait for the acks rather than racing them.
         val ackDeadline = System.nanoTime() + Duration.ofSeconds(30).toNanos()
-        while (egress.published < 5L && egress.failed == 0L && System.nanoTime() < ackDeadline) {
+        while (egress.published < 9L && egress.failed == 0L && System.nanoTime() < ackDeadline) {
             Thread.sleep(100)
         }
         egress.close()
-        assertEquals(5, egress.published, "the broker should have acknowledged everything, failed=${egress.failed}")
+        assertEquals(9, egress.published, "the broker should have acknowledged everything, failed=${egress.failed}")
 
         val fills = consume(KafkaMarketEgress.DEFAULT_FILLS_TOPIC, expected = 2)
         assertEquals(2, fills.size, "two fills printed")
@@ -73,6 +74,15 @@ class KafkaEgressIntegrationTest {
         val commands = consume(KafkaMarketEgress.DEFAULT_COMMANDS_TOPIC, expected = 3)
         val replayed = replay(seed, commands.map { parseCommand(it.value()) })
         assertEquals(live, replayed, "replaying the consumed log must reproduce the live book")
+
+        // Latest-value semantics: the newest L2 record is the live book, tape excluded.
+        val depths = consume(KafkaMarketEgress.DEFAULT_L2_TOPIC, expected = 4)
+        assertEquals(4, depths.size, "seeded book plus one snapshot per submit")
+        assertEquals(
+            """{"v":1,"symbol":"SIM",""" + live.depthJson().drop(1),
+            depths.last().value(),
+            "the newest depth record must be the live book",
+        )
     }
 
     private fun consume(

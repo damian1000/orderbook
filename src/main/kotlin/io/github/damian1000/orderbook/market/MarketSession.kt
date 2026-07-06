@@ -42,6 +42,7 @@ class MarketSession(
     private val tapeLimit: Int = 30,
     private val fills: FillListener = FillListener.NONE,
     private val commands: CommandListener = CommandListener.NONE,
+    private val depth: DepthListener = DepthListener.NONE,
 ) : Market,
     AutoCloseable {
     private val book = PlainOrderBook()
@@ -51,7 +52,10 @@ class MarketSession(
     private val writer = Executors.newSingleThreadExecutor { Thread(it, "market-session").apply { isDaemon = true } }
 
     init {
-        onWriter { place(seed.orders) }
+        onWriter {
+            place(seed.orders)
+            depth.onDepth(snapshotAt(clock()))
+        }
     }
 
     override fun submit(
@@ -71,7 +75,9 @@ class MarketSession(
             // Logged only once the submit has been applied: a rejected order threw above and
             // never reaches the command log, so a replayed log contains no failing submits.
             commands.onSubmit(SubmitCommand(side, price, size, now))
-            SubmitOutcome(trades.size, snapshotAt(now))
+            val snapshot = snapshotAt(now)
+            depth.onDepth(snapshot)
+            SubmitOutcome(trades.size, snapshot)
         }
 
     override fun snapshot(): MarketSnapshot = onWriter { snapshotAt(clock()) }

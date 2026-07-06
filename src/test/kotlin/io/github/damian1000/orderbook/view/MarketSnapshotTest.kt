@@ -92,4 +92,21 @@ class MarketSnapshotTest {
         assertEquals("""{"ts":1,"bids":[],"asks":[],"tape":[]}""", json)
         assertTrue(json.startsWith("{") && json.endsWith("}"))
     }
+
+    @Test
+    fun `depthJson is the book without the tape`() {
+        val snapshot =
+            MarketSnapshot(
+                timeMillis = 7L,
+                bids = listOf(DepthLevel(Price.of("99.00"), 10, 10)),
+                asks = listOf(DepthLevel(Price.of("101.00"), 5, 5)),
+                tape = listOf(TapeEntry(Price.of("101.00"), 5, Side.BID, 1_700L)),
+            )
+
+        assertEquals(
+            """{"ts":7,"bids":[{"price":"99.00000000","size":10,"cumulative":10}],""" +
+                """"asks":[{"price":"101.00000000","size":5,"cumulative":5}]}""",
+            snapshot.depthJson(),
+        )
+    }
 }

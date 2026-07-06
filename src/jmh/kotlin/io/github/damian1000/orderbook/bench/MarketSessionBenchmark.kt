@@ -2,6 +2,7 @@ package io.github.damian1000.orderbook.bench
 
 import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
 import io.github.damian1000.orderbook.market.CommandListener
+import io.github.damian1000.orderbook.market.DepthListener
 import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.market.SeedLiquidity
@@ -61,6 +62,7 @@ open class MarketSessionBenchmark {
                     ),
                 fills = publisher ?: FillListener.NONE,
                 commands = publisher ?: CommandListener.NONE,
+                depth = publisher ?: DepthListener.NONE,
             )
     }
 
