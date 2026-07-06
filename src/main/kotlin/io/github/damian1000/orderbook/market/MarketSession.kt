@@ -41,6 +41,7 @@ class MarketSession(
     private val clock: () -> Long = System::currentTimeMillis,
     private val tapeLimit: Int = 30,
     private val fills: FillListener = FillListener.NONE,
+    private val commands: CommandListener = CommandListener.NONE,
 ) : Market,
     AutoCloseable {
     private val book = PlainOrderBook()
@@ -67,6 +68,9 @@ class MarketSession(
                 fills.onFill(trade, now)
             }
             replenishEmptySides()
+            // Logged only once the submit has been applied: a rejected order threw above and
+            // never reaches the command log, so a replayed log contains no failing submits.
+            commands.onSubmit(SubmitCommand(side, price, size, now))
             SubmitOutcome(trades.size, snapshotAt(now))
         }
 

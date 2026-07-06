@@ -1,6 +1,7 @@
 package io.github.damian1000.orderbook.bench
 
-import io.github.damian1000.orderbook.kafka.KafkaFillPublisher
+import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
+import io.github.damian1000.orderbook.market.CommandListener
 import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.market.SeedLiquidity
@@ -29,8 +30,9 @@ import java.util.concurrent.TimeUnit
 
 /**
  * [MarketSession.submit] end-to-end (writer-thread hand-off included) with and without the Kafka
- * fills egress attached. The claim under test: the egress adds one bounded-queue enqueue to the
- * submit path and nothing else — the producer I/O happens on the egress thread. Measured in
+ * egress attached. The claim under test: the egress adds a bounded-queue enqueue per event (the
+ * accepted command plus each fill) and nothing else — producer I/O happens on the egress thread.
+ * Measured in
  * [Mode.SampleTime] so the tail is visible; the broker is a stub that acknowledges instantly,
  * because the subject is the submit path's overhead, not broker round-trips.
  */
@@ -42,12 +44,12 @@ open class MarketSessionBenchmark {
     var egress: String = ""
 
     private lateinit var session: MarketSession
-    private var publisher: KafkaFillPublisher? = null
+    private var publisher: KafkaMarketEgress? = null
     private val offerPrice = Price(101L * UNIT)
 
     @Setup(Level.Iteration)
     fun setup() {
-        publisher = if (egress == "kafka") KafkaFillPublisher(DiscardingProducer()).also { it.start() } else null
+        publisher = if (egress == "kafka") KafkaMarketEgress(DiscardingProducer()).also { it.start() } else null
         session =
             MarketSession(
                 seed =
@@ -58,6 +60,7 @@ open class MarketSessionBenchmark {
                         ),
                     ),
                 fills = publisher ?: FillListener.NONE,
+                commands = publisher ?: CommandListener.NONE,
             )
     }
 
@@ -78,7 +81,7 @@ open class MarketSessionBenchmark {
      * in its history list, which over a sampling window is gigabytes of GC noise.
      */
     private class DiscardingProducer : MockProducer<String, String>() {
-        private val metadata = RecordMetadata(TopicPartition(KafkaFillPublisher.DEFAULT_TOPIC, 0), 0, 0, 0, 0, 0)
+        private val metadata = RecordMetadata(TopicPartition(KafkaMarketEgress.DEFAULT_FILLS_TOPIC, 0), 0, 0, 0, 0, 0)
 
         override fun send(
             record: ProducerRecord<String, String>,

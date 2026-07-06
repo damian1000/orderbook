@@ -93,6 +93,26 @@ class MarketSessionTest {
     }
 
     @Test
+    fun `accepted submits reach the command listener in order, rejected ones never do`() {
+        val log = mutableListOf<SubmitCommand>()
+        MarketSession(seed = seed, clock = { 1_000L }, commands = { log.add(it) }).use { session ->
+            session.submit(Side.BID, Price.of("101.00"), 5)
+            assertThrows(IllegalArgumentException::class.java) {
+                session.submit(Side.BID, Price.of("100.00"), 0)
+            }
+            session.submit(Side.OFFER, Price.of("102.00"), 3)
+        }
+
+        assertEquals(
+            listOf(
+                SubmitCommand(Side.BID, Price.of("101.00"), 5, 1_000L),
+                SubmitCommand(Side.OFFER, Price.of("102.00"), 3, 1_000L),
+            ),
+            log,
+        )
+    }
+
+    @Test
     fun `the tape is bounded by the configured limit`() {
         MarketSession(seed = seed, clock = { 1_000L }, tapeLimit = 2).use { session ->
             repeat(4) { session.submit(Side.BID, Price.of("101.00"), 5) }

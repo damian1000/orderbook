@@ -91,11 +91,13 @@ val fills = engine.submit(Order(2L, Price.of("101"), Side.BID, 8))
 
 Scope: plain limit orders (cross, then rest the remainder). Richer types — market, IOC/FOK, stop, iceberg — build on this. The [live web front end](https://orderbook.damianhoward.com) wraps the engine in a dependency-free JDK `HttpServer`, pushing book and tape updates to the browser over Server-Sent Events.
 
-## Kafka egress — fills
+## Kafka egress
 
-The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill crosses a seam (`FillListener`) that costs the writer a single bounded-queue enqueue, and a dedicated egress thread drains the queue into a `KafkaProducer`. If the queue fills — broker down, network stalled — the oldest pending fill is dropped and counted rather than blocking the writer, so the live book keeps serving while the `dropped` counter records the gap. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
+The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill and each accepted command crosses a seam (`FillListener` / `CommandListener`) that costs the writer a bounded-queue enqueue, and a dedicated egress thread (`KafkaMarketEgress`) drains the queue into one `KafkaProducer` across two topics. If the queue fills — broker down, network stalled — the oldest pending event is dropped and counted rather than blocking the writer, so the live book keeps serving while the `dropped` counter records the gap. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
 
-Records on `orderbook.fills` are versioned JSON keyed by symbol, so per-symbol ordering holds when multiple instruments exist downstream:
+Records are versioned JSON keyed by symbol, so per-symbol ordering holds when multiple instruments exist downstream.
+
+**`orderbook.fills`** — one record per fill, the seam downstream consumers subscribe to:
 
 ```json
 {
@@ -110,13 +112,28 @@ Records on `orderbook.fills` are versioned JSON keyed by symbol, so per-symbol o
 }
 ```
 
+**`orderbook.commands`** — the ordered log of accepted submits (a rejected order never reaches it):
+
+```json
+{
+  "v": 1,
+  "symbol": "SIM",
+  "side": "BID",
+  "price": "101.00000000",
+  "size": 5,
+  "ts": 1000
+}
+```
+
+The command log enables deterministic replay: seeding, replenishment, and order ids are all deterministic functions of the seed and the command sequence, so `replay(seed, commands)` rebuilds a fresh session whose snapshot equals the live one — asserted in CI by consuming the log back off a real broker and comparing books. A `dropped` count above zero is the signal a log is no longer replayable.
+
 The egress is off unless the environment wires it:
 
 - `KAFKA_BOOTSTRAP_SERVERS` — setting it enables the egress; unset, no producer exists
-- `KAFKA_FILLS_TOPIC` — topic override (default `orderbook.fills`)
+- `KAFKA_FILLS_TOPIC` / `KAFKA_COMMANDS_TOPIC` — topic overrides (defaults `orderbook.fills`, `orderbook.commands`)
 - `ORDERBOOK_SYMBOL` — record key (default `SIM`)
 
-`KafkaFillEgressIntegrationTest` exercises the path against a real broker (Testcontainers) on every CI run: fills submitted through a live `MarketSession` are consumed back off the topic. `MarketSessionBenchmark` measures `submit()` with the egress attached vs absent; the producer I/O runs on the egress thread, so the submit path pays only the enqueue.
+`KafkaEgressIntegrationTest` exercises both topics against a real broker (Testcontainers) on every CI run. `MarketSessionBenchmark` measures `submit()` with the egress attached vs absent; the producer I/O runs on the egress thread, so the submit path pays only the enqueues.
 
 ## Run
 

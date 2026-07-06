@@ -2,7 +2,8 @@ package io.github.damian1000.orderbook.web
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
-import io.github.damian1000.orderbook.kafka.KafkaFillPublisher
+import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
+import io.github.damian1000.orderbook.market.CommandListener
 import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
@@ -151,16 +152,22 @@ class WebServer(
 fun main() {
     val port = (System.getenv("PORT") ?: "8080").toInt()
     // Kafka egress is opt-in by environment: unset means no producer exists at all and the
-    // server runs exactly as before. The fills topic is the seam downstream consumers read.
-    val fillPublisher =
+    // server runs exactly as before. The fills topic is the seam downstream consumers read;
+    // the commands topic is the ordered log a fresh book can be replayed from.
+    val egress =
         System.getenv("KAFKA_BOOTSTRAP_SERVERS")?.let { bootstrap ->
-            KafkaFillPublisher.create(
+            KafkaMarketEgress.create(
                 bootstrapServers = bootstrap,
-                topic = System.getenv("KAFKA_FILLS_TOPIC") ?: KafkaFillPublisher.DEFAULT_TOPIC,
-                symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaFillPublisher.DEFAULT_SYMBOL,
+                fillsTopic = System.getenv("KAFKA_FILLS_TOPIC") ?: KafkaMarketEgress.DEFAULT_FILLS_TOPIC,
+                commandsTopic = System.getenv("KAFKA_COMMANDS_TOPIC") ?: KafkaMarketEgress.DEFAULT_COMMANDS_TOPIC,
+                symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaMarketEgress.DEFAULT_SYMBOL,
             )
         }
-    val session = MarketSession(fills = fillPublisher ?: FillListener.NONE)
+    val session =
+        MarketSession(
+            fills = egress ?: FillListener.NONE,
+            commands = egress ?: CommandListener.NONE,
+        )
     val broadcaster = SseBroadcaster()
     val server = WebServer(session, WebAssets.load(), broadcaster, port)
     // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
@@ -171,7 +178,7 @@ fun main() {
             server.stop()
             broadcaster.close()
             session.close()
-            fillPublisher?.close()
+            egress?.close()
         },
     )
     server.start()
