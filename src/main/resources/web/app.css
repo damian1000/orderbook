@@ -108,9 +108,10 @@ a:hover {
 .statusbar {
   display: flex;
   align-items: center;
-  gap: 18px;
-  height: 30px;
-  padding: 0 18px;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  min-height: 30px;
+  padding: 6px 18px;
   background: var(--bg-pin);
   border-top: 1px solid var(--rule-bright);
   font-size: 10.5px;
@@ -584,5 +585,9 @@ a:hover {
 
   .stat .v {
     font-size: 14px;
+  }
+
+  .statusbar .tagline {
+    display: none;
   }
 }
