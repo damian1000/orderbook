@@ -1,6 +1,8 @@
 package io.github.damian1000.orderbook.web
 
 import com.sun.net.httpserver.HttpExchange
+import io.github.damian1000.orderbook.market.DepthListener
+import io.github.damian1000.orderbook.view.MarketSnapshot
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ArrayBlockingQueue
@@ -18,6 +20,18 @@ interface Broadcaster {
         exchange: HttpExchange,
         initialJson: String,
     )
+}
+
+/**
+ * Bridges the market's depth stream to the [Broadcaster]: every post-mutation snapshot is
+ * serialised and fanned out on the market's writer thread, so clients receive frames in exactly
+ * the order the book changed — per-request broadcasting from HTTP threads couldn't guarantee that
+ * when submits race. Serialise-and-enqueue only, honouring [DepthListener]'s never-block contract.
+ */
+class DepthBroadcast(
+    private val broadcaster: Broadcaster,
+) : DepthListener {
+    override fun onDepth(snapshot: MarketSnapshot) = broadcaster.broadcast(snapshot.toJson())
 }
 
 /**
@@ -55,8 +69,12 @@ class SseBroadcaster(
         val out = exchange.responseBody
         val client = Client(queueCapacity)
         try {
-            write(out, "retry: 3000\n\n" + asEvent(initialJson))
+            // Register before the initial write: a snapshot broadcast during the write would
+            // otherwise be missed entirely, leaving this client stale until the next submit.
+            // Queued frames are complete snapshots newer than the initial one, so draining them
+            // straight after it keeps the stream monotonic.
             clients.add(client)
+            write(out, "retry: 3000\n\n" + asEvent(initialJson))
             while (true) {
                 write(out, client.queue.take())
             }

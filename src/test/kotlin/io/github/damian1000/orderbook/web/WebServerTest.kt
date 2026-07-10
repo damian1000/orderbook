@@ -1,6 +1,11 @@
 package io.github.damian1000.orderbook.web
 
+import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
+import io.github.damian1000.orderbook.market.SubmitOutcome
+import io.github.damian1000.orderbook.model.Price
+import io.github.damian1000.orderbook.model.Side
+import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -25,8 +30,10 @@ class WebServerTest {
 
     @BeforeEach
     fun start() {
-        session = MarketSession()
         broadcaster = SseBroadcaster()
+        // Same wiring as main(): SSE frames come from the market's depth stream, not from the
+        // HTTP handler, so the stream test below exercises the real push path.
+        session = MarketSession(depth = DepthBroadcast(broadcaster))
         server = WebServer(session, WebAssets.load(), broadcaster, port = 0)
         server.start()
     }
@@ -132,6 +139,33 @@ class WebServerTest {
     @Test
     fun `a malformed price is a 400`() {
         assertEquals(400, request("POST", "/api/order?side=BUY&price=abc&size=1").statusCode())
+    }
+
+    @Test
+    fun `an unexpected failure maps to a 500, not a dropped connection`() {
+        val failing =
+            object : Market {
+                override fun submit(
+                    side: Side,
+                    price: Price,
+                    size: Long,
+                ): SubmitOutcome = throw IllegalStateException("boom")
+
+                override fun snapshot(): MarketSnapshot = throw IllegalStateException("boom")
+            }
+        val failingServer = WebServer(failing, WebAssets.load(), SseBroadcaster(), port = 0)
+        failingServer.start()
+        try {
+            val request =
+                HttpRequest
+                    .newBuilder(URI("http://localhost:${failingServer.boundPort}/api/state"))
+                    .build()
+            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+            assertEquals(500, response.statusCode())
+            assertTrue(response.body().contains("\"error\""))
+        } finally {
+            failingServer.stop()
+        }
     }
 
     @Test

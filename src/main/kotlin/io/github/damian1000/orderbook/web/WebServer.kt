@@ -16,12 +16,15 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * HTTP transport for a [Market]: serves the static UI, the JSON API, and live SSE updates via a
- * [Broadcaster]. Plumbing only — book behaviour lives in the market layer, rendering in the view
- * layer. JDK [HttpServer] on a cached pool, which serves the long-lived SSE streams.
+ * HTTP transport for a [Market]: serves the static UI, the JSON API, and the SSE stream endpoint.
+ * Live frames reach the [Broadcaster] from the market's depth stream via [DepthBroadcast] (wired
+ * where the session is built — see [main]); this class only attaches clients to it. Plumbing only —
+ * book behaviour lives in the market layer, rendering in the view layer. JDK [HttpServer] on a
+ * cached pool, which serves the long-lived SSE streams.
  *
  * Reads are GET; `/api/order` mutates the book, so it is POST-only — a GET that changes state
- * would be prefetchable/cacheable. Invalid input maps to a 400 with a JSON `error` body.
+ * would be prefetchable/cacheable. Invalid input maps to a 400 with a JSON `error` body; anything
+ * unexpected maps to a 500.
  */
 class WebServer(
     private val session: Market,
@@ -66,6 +69,12 @@ class WebServer(
             }
         } catch (e: IllegalArgumentException) {
             respond(exchange, 400, "application/json", """{"error":${jsonString(e.message ?: "bad request")}}""")
+        } catch (e: Exception) {
+            // Anything unexpected must still answer the request — without this the connection
+            // just closes with no status line. The stack goes to stderr -> journalctl; the
+            // response stays generic.
+            e.printStackTrace()
+            runCatching { respond(exchange, 500, "application/json", """{"error":"internal error"}""") }
         }
     }
 
@@ -75,10 +84,10 @@ class WebServer(
         val price = parsePrice(params["price"])
         val size = parseSize(params["size"])
 
+        // The SSE push is not done here: the market's depth stream broadcasts on the writer
+        // thread, so racing submits can't deliver stale frames out of order.
         val outcome = session.submit(side, price, size)
-        val json = outcome.snapshot.toJson()
-        broadcaster.broadcast(json)
-        return """{"matched":${outcome.matched},${json.drop(1)}"""
+        return """{"matched":${outcome.matched},${outcome.snapshot.toJson().drop(1)}"""
     }
 
     private fun parseSide(raw: String?): Side =
@@ -166,13 +175,14 @@ fun main() {
                 symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaMarketEgress.DEFAULT_SYMBOL,
             )
         }
+    val broadcaster = SseBroadcaster()
     val session =
         MarketSession(
             fills = egress ?: FillListener.NONE,
             commands = egress ?: CommandListener.NONE,
-            depth = egress ?: DepthListener.NONE,
+            // SSE frames leave from the depth stream on the writer thread — see DepthBroadcast.
+            depth = DepthListener.tee(egress ?: DepthListener.NONE, DepthBroadcast(broadcaster)),
         )
-    val broadcaster = SseBroadcaster()
     val server = WebServer(session, WebAssets.load(), broadcaster, port)
     // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
     // then the broadcaster's heartbeat and the session's writer thread are released, and the

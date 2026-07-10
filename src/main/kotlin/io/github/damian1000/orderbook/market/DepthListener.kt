@@ -15,5 +15,8 @@ fun interface DepthListener {
     companion object {
         /** Discards snapshots — the default for a market with no egress attached. */
         val NONE = DepthListener { }
+
+        /** One listener fanning the stream out to [listeners], invoked in order on the writer thread. */
+        fun tee(vararg listeners: DepthListener): DepthListener = DepthListener { snapshot -> listeners.forEach { it.onDepth(snapshot) } }
     }
 }
