@@ -6,6 +6,8 @@ After=network.target
 Environment=JAVA_HOME=/opt/jdk25
 Environment=JAVA_OPTS=-Xmx256m
 Environment=PORT=8080
+# Box-local egress config (KAFKA_BOOTSTRAP_SERVERS etc.); optional - absent means egress off.
+EnvironmentFile=-/etc/orderbook/egress.env
 ExecStart=/home/ubuntu/orderbook/bin/orderbook
 Restart=on-failure
 RestartSec=2
