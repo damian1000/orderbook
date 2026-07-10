@@ -1,1 +1,8 @@
+plugins {
+    // Provisions the JDK 25 toolchain on machines that lack it (e.g. JitPack's builder).
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 rootProject.name = 'orderbook'
+
+include ':core', ':app'

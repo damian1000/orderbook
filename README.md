@@ -214,10 +214,10 @@ Reproduce:
 
 ```bash
 ./gradlew jmhJar
-java -jar build/libs/orderbook-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
-java -jar build/libs/orderbook-1.0.0-jmh.jar OrderBookBenchmark -p impl=disruptor -f 1
-java -jar build/libs/orderbook-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
-java -jar build/libs/orderbook-1.0.0-jmh.jar TickArrayOrderBookBenchmark -f 1 -wi 3 -i 5 -w 2s -r 2s
+java -jar core/build/libs/core-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
+java -jar core/build/libs/core-1.0.0-jmh.jar OrderBookBenchmark -p impl=disruptor -f 1
+java -jar core/build/libs/core-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
+java -jar core/build/libs/core-1.0.0-jmh.jar TickArrayOrderBookBenchmark -f 1 -wi 3 -i 5 -w 2s -r 2s
 ```
 
 ## Use it

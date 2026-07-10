@@ -36,10 +36,10 @@ jobs:
       # The deploy pipeline re-verifies the full gate before packaging — CD owns its own
       # go/no-go rather than trusting a separate workflow, and ships the bytes it just tested.
       - name: Build, test, and package the distribution
-        run: ./gradlew --no-daemon clean check installDist
+        run: ./gradlew --no-daemon clean check :app:installDist
 
       - name: Package distribution
-        run: tar -czf orderbook-dist.tar.gz -C build/install orderbook
+        run: tar -czf orderbook-dist.tar.gz -C app/build/install orderbook
 
       - name: Upload distribution
         uses: actions/upload-artifact@v7

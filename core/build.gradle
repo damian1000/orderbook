@@ -1,0 +1,97 @@
+// The order-book library: book, engine, model, market, view - plus the JMH benchmarks that
+// measure it. No web, no Kafka, no entry point; this is the module published for consumers
+// (JitPack builds it from a tag), and its only runtime dependency is the Disruptor.
+plugins {
+    id 'java-library'
+    id 'org.jetbrains.kotlin.jvm'
+    id 'me.champeau.jmh'
+    id 'jacoco'
+    id 'maven-publish'
+}
+
+group = 'io.github.damian1000'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    withSourcesJar() // so a consumer's IDE can navigate the source
+}
+
+kotlin {
+    jvmToolchain(25)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+    implementation 'com.lmax:disruptor:4.0.0'
+
+    testImplementation platform("org.junit:junit-bom:6.1.1")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.hamcrest:hamcrest:3.0'
+}
+
+test {
+    useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+// The library carries no entry point, so nothing is excluded: every class meets the gate.
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.90
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification
+
+jmh {
+    fork = 1
+    warmupIterations = 3
+    iterations = 5
+    // No benchmarkMode here: the plugin passes it as -bm, which overrides every class's
+    // @BenchmarkMode annotation (it is not a fallback default). Each benchmark declares its
+    // own mode — SampleTime for the tail-latency runs, Throughput for the contended run,
+    // AverageTime for the sub-µs raw book ops.
+    timeUnit = 'us'
+    profilers = ['gc'] // allocations/op (gc.alloc.rate.norm) + GC pause stats on every benchmark
+    resultFormat = 'JSON'
+    resultsFile = project.file("${buildDir}/reports/jmh/results.json")
+}
+
+// No remote repository: JitPack builds from the git tag, so publishing exists only for
+// publishToMavenLocal (local verification and a consumer dry run).
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            // Not the bare project name 'core': both this repo and risk-engine publish a :core,
+            // and the artifactId is what keeps them distinct in a local repository.
+            artifactId = 'orderbook-core'
+        }
+    }
+}

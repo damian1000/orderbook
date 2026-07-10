@@ -29,6 +29,12 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
+// 10^Price.SCALE — a whole price unit expressed in ticks (as in :core's BenchSupport).
+private const val UNIT = 100_000_000L
+
+// Every resting order is the same size, so a same-size aggressor fills exactly one at the top.
+private const val RESTING_SIZE = 100L
+
 /**
  * [MarketSession.submit] end-to-end (writer-thread hand-off included) with and without the Kafka
  * egress attached. The claim under test: the egress adds a bounded-queue enqueue per event (the
