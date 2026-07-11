@@ -62,6 +62,7 @@ class WebServer(
                 "/" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml) }
                 "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
                 "/app.js" -> get(exchange) { respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs) }
+                "/privacy" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.privacyHtml) }
                 "/api/state" -> get(exchange) { respond(exchange, 200, "application/json", session.snapshot().toJson()) }
                 "/api/order" -> post(exchange) { respond(exchange, 200, "application/json", submit(exchange)) }
                 "/api/stream" -> get(exchange) { broadcaster.stream(exchange, session.snapshot().toJson()) }

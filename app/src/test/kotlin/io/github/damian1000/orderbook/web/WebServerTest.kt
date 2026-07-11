@@ -72,6 +72,14 @@ class WebServerTest {
     }
 
     @Test
+    fun `serves the privacy notice`() {
+        val response = request("GET", "/privacy")
+        assertEquals(200, response.statusCode())
+        assertEquals("text/html; charset=utf-8", response.headers().firstValue("Content-Type").get())
+        assertTrue(response.body().contains("Privacy"))
+    }
+
+    @Test
     fun `state returns the book as JSON`() {
         val response = request("GET", "/api/state")
         assertEquals(200, response.statusCode())
