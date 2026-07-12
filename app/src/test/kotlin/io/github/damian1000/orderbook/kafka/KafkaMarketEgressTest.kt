@@ -149,4 +149,41 @@ class KafkaMarketEgressTest {
         egress.close()
         assertEquals(0, egress.published)
     }
+
+    @Test
+    fun `create with credentials builds and closes a real SASL producer without a reachable broker`() {
+        val egress = KafkaMarketEgress.create("localhost:59099", scram = ScramCredentials("user", "pw"))
+        egress.close()
+        assertEquals(0, egress.published)
+    }
+
+    @Test
+    fun `without credentials the producer config carries no security settings`() {
+        val props = KafkaMarketEgress.producerProperties("localhost:9092", scram = null)
+        assertEquals(null, props["security.protocol"])
+        assertEquals(null, props["sasl.mechanism"])
+        assertEquals(null, props["sasl.jaas.config"])
+    }
+
+    @Test
+    fun `with credentials the producer authenticates over SASL_PLAINTEXT with SCRAM-SHA-256`() {
+        val props = KafkaMarketEgress.producerProperties("localhost:9092", ScramCredentials("orderbook-egress", "s3cret"))
+        assertEquals("SASL_PLAINTEXT", props["security.protocol"])
+        assertEquals("SCRAM-SHA-256", props["sasl.mechanism"])
+        assertEquals(
+            """org.apache.kafka.common.security.scram.ScramLoginModule required """ +
+                """username="orderbook-egress" password="s3cret";""",
+            props["sasl.jaas.config"],
+        )
+    }
+
+    @Test
+    fun `JAAS values escape quotes and backslashes`() {
+        val props = KafkaMarketEgress.producerProperties("localhost:9092", ScramCredentials("user", """p"w\d"""))
+        assertEquals(
+            """org.apache.kafka.common.security.scram.ScramLoginModule required """ +
+                """username="user" password="p\"w\\d";""",
+            props["sasl.jaas.config"],
+        )
+    }
 }

@@ -3,6 +3,7 @@ package io.github.damian1000.orderbook.web
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
+import io.github.damian1000.orderbook.kafka.ScramCredentials
 import io.github.damian1000.orderbook.market.CommandListener
 import io.github.damian1000.orderbook.market.DepthListener
 import io.github.damian1000.orderbook.market.FillListener
@@ -174,6 +175,7 @@ fun main() {
                 commandsTopic = System.getenv("KAFKA_COMMANDS_TOPIC") ?: KafkaMarketEgress.DEFAULT_COMMANDS_TOPIC,
                 l2Topic = System.getenv("KAFKA_L2_TOPIC") ?: KafkaMarketEgress.DEFAULT_L2_TOPIC,
                 symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaMarketEgress.DEFAULT_SYMBOL,
+                scram = ScramCredentials.fromEnv(System.getenv()),
             )
         }
     val broadcaster = SseBroadcaster()

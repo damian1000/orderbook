@@ -6,10 +6,12 @@ import io.github.damian1000.orderbook.market.FillListener
 import io.github.damian1000.orderbook.market.SubmitCommand
 import io.github.damian1000.orderbook.model.Trade
 import io.github.damian1000.orderbook.view.MarketSnapshot
+import org.apache.kafka.clients.CommonClientConfigs
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.Producer
 import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.clients.producer.ProducerRecord
+import org.apache.kafka.common.config.SaslConfigs
 import org.apache.kafka.common.serialization.StringSerializer
 import java.time.Duration
 import java.util.Properties
@@ -165,27 +167,45 @@ class KafkaMarketEgress(
 
         /** A started egress over a real [KafkaProducer]. The timeouts are tightened from the
          * defaults so a dead broker surfaces as counted failures and drops within seconds instead
-         * of buffering silently for two minutes. */
+         * of buffering silently for two minutes. With [scram] the producer authenticates over
+         * SASL_PLAINTEXT/SCRAM-SHA-256; without it the connection is unauthenticated plaintext. */
         fun create(
             bootstrapServers: String,
             fillsTopic: String = DEFAULT_FILLS_TOPIC,
             commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
             l2Topic: String = DEFAULT_L2_TOPIC,
             symbol: String = DEFAULT_SYMBOL,
+            scram: ScramCredentials? = null,
         ): KafkaMarketEgress {
-            val props =
-                Properties().apply {
-                    put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers)
-                    put(ProducerConfig.CLIENT_ID_CONFIG, "orderbook-egress")
-                    put(ProducerConfig.LINGER_MS_CONFIG, 5)
-                    put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5_000)
-                    put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5_000)
-                    put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 10_000)
-                    // 8 MB, not the 32 MB default — the producer lives inside a 256 MB live-server heap.
-                    put(ProducerConfig.BUFFER_MEMORY_CONFIG, 8L * 1024 * 1024)
-                }
-            val producer = KafkaProducer(props, StringSerializer(), StringSerializer())
+            val producer = KafkaProducer(producerProperties(bootstrapServers, scram), StringSerializer(), StringSerializer())
             return KafkaMarketEgress(producer, fillsTopic, commandsTopic, l2Topic, symbol).also { it.start() }
         }
+
+        internal fun producerProperties(
+            bootstrapServers: String,
+            scram: ScramCredentials?,
+        ): Properties =
+            Properties().apply {
+                put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers)
+                put(ProducerConfig.CLIENT_ID_CONFIG, "orderbook-egress")
+                put(ProducerConfig.LINGER_MS_CONFIG, 5)
+                put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5_000)
+                put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5_000)
+                put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 10_000)
+                // 8 MB, not the 32 MB default — the producer lives inside a 256 MB live-server heap.
+                put(ProducerConfig.BUFFER_MEMORY_CONFIG, 8L * 1024 * 1024)
+                if (scram != null) {
+                    put(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG, "SASL_PLAINTEXT")
+                    put(SaslConfigs.SASL_MECHANISM, "SCRAM-SHA-256")
+                    put(
+                        SaslConfigs.SASL_JAAS_CONFIG,
+                        "org.apache.kafka.common.security.scram.ScramLoginModule required " +
+                            "username=${jaasQuote(scram.username)} password=${jaasQuote(scram.password)};",
+                    )
+                }
+            }
+
+        // JAAS values are double-quoted strings; escape the two characters that break out of one.
+        private fun jaasQuote(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
     }
 }
