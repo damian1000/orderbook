@@ -1,10 +1,16 @@
 package io.github.damian1000.orderbook.web
 
+import io.github.damian1000.marketdata.cache.QuoteCache
+import io.github.damian1000.marketdata.model.Instrument
+import io.github.damian1000.marketdata.model.Quote
+import io.github.damian1000.marketdata.source.QuoteSource
+import io.github.damian1000.marketdata.source.QuoteUnavailable
 import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.market.SubmitOutcome
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
+import io.github.damian1000.orderbook.quote.QuoteSeed
 import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -12,34 +18,54 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.BufferedReader
+import java.math.BigDecimal
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.time.Instant
 
 /**
  * Loopback tests over a real [WebServer] on an ephemeral port — the transport is driven end to
  * end (routing, method enforcement, error mapping, SSE), not mocked.
  */
 class WebServerTest {
+    // Only "SIM" and "AAPL"/"MSFT" (used by the multi-symbol tests) resolve; anything else fails
+    // the way a genuinely unknown ticker fails against the real provider.
+    private val fakeQuoteSource =
+        QuoteSource { symbol ->
+            if (symbol !in setOf("SIM", "AAPL", "MSFT")) throw QuoteUnavailable("no such symbol: $symbol")
+            Quote(
+                instrument = Instrument(symbol, "$symbol Inc.", "USD", "NasdaqGS"),
+                last = BigDecimal("100.00"),
+                previousClose = BigDecimal("99.00"),
+                dayHigh = BigDecimal("101.00"),
+                dayLow = BigDecimal("98.50"),
+                asOf = Instant.parse("2026-07-15T20:00:00Z"),
+                marketOpen = false,
+            )
+        }
+    private lateinit var quotes: QuoteCache
     private lateinit var registry: SessionRegistry
     private lateinit var server: WebServer
     private val client: HttpClient = HttpClient.newHttpClient()
 
     @BeforeEach
     fun start() {
-        // Same wiring as main(): SSE frames come from the market's depth stream, not from the
-        // HTTP handler, so the stream test below exercises the real push path. One book per
-        // symbol, lazily created on first request.
+        quotes = QuoteCache(fakeQuoteSource)
+        // Same wiring as main(): a symbol whose quote can't be fetched is unknown, not a fallback
+        // to a synthetic ladder. SSE frames come from the market's depth stream, not from the HTTP
+        // handler, so the stream test below exercises the real push path.
         registry =
-            SessionRegistry { _ ->
+            SessionRegistry { symbol ->
+                val cached = quotes.refresh(symbol) ?: throw UnknownSymbolException(symbol)
                 val broadcaster = SseBroadcaster()
-                val session = MarketSession(depth = DepthBroadcast(broadcaster))
+                val session = MarketSession(seed = QuoteSeed.around(cached.quote), depth = DepthBroadcast(broadcaster))
                 broadcaster.startHeartbeat()
                 ManagedSession(session, broadcaster)
             }
-        server = WebServer(registry, WebAssets.load(), port = 0)
+        server = WebServer(registry, quotes, WebAssets.load(), port = 0)
         server.start()
     }
 
@@ -166,7 +192,7 @@ class WebServerTest {
                 override fun snapshot(): MarketSnapshot = throw IllegalStateException("boom")
             }
         val failingRegistry = SessionRegistry { _ -> ManagedSession(failing, SseBroadcaster()) }
-        val failingServer = WebServer(failingRegistry, WebAssets.load(), port = 0)
+        val failingServer = WebServer(failingRegistry, quotes, WebAssets.load(), port = 0)
         failingServer.start()
         try {
             val request =
@@ -210,6 +236,36 @@ class WebServerTest {
     fun `an unrecognised symbol shape is a 404, not a book`() {
         assertEquals(404, request("GET", "/api/@@@/state").statusCode())
         assertEquals(404, request("GET", "/api//state").statusCode())
+    }
+
+    @Test
+    fun `a well-shaped symbol no quote exists for is a 404, never a fake book`() {
+        val response = request("GET", "/api/ZZZZ/state")
+        assertEquals(404, response.statusCode())
+        assertTrue(response.body().contains("\"error\""))
+    }
+
+    @Test
+    fun `symbols lists the curated picker options`() {
+        val response = request("GET", "/api/symbols")
+        assertEquals(200, response.statusCode())
+        assertTrue(response.body().contains("\"symbol\":\"AAPL\""))
+        assertTrue(response.body().contains("\"name\":\"Apple\""))
+    }
+
+    @Test
+    fun `quote reports the instrument a book was seeded from`() {
+        request("GET", "/api/AAPL/state") // creates the session, fetching the fake quote
+        val response = request("GET", "/api/AAPL/quote")
+        assertEquals(200, response.statusCode())
+        assertTrue(response.body().contains("\"symbol\":\"AAPL\""))
+        assertTrue(response.body().contains("\"name\":\"AAPL Inc.\""))
+        assertTrue(response.body().contains("\"last\":\"100.00\""))
+    }
+
+    @Test
+    fun `quote rejects non-GET methods`() {
+        assertEquals(405, request("POST", "/api/SIM/quote").statusCode())
     }
 
     private fun dataFrame(reader: BufferedReader): String {

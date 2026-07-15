@@ -7,8 +7,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const DASH = "—";
-  // Fixed until the symbol picker lands: the server already routes any symbol under /api/{symbol}.
-  const SYMBOL = "SIM";
+  const DEFAULT_SYMBOL = "AAPL";
 
   const num = (s) => parseFloat(s);
   const price2 = (s) => num(s).toFixed(2);
@@ -20,7 +19,7 @@
 
   // --- Order-book ladder --------------------------------------------------
   // Previous sizes per side, keyed by price, so a level that changes can flash.
-  const prevSize = { bid: {}, ask: {} };
+  let prevSize = { bid: {}, ask: {} };
 
   const totalDepth = (levels) =>
     levels.length ? levels[levels.length - 1].cumulative : 0;
@@ -81,6 +80,7 @@
       lastEl.textContent = DASH;
       lastEl.className = "v";
     }
+    return bestBid;
   }
 
   // --- Trade tape ---------------------------------------------------------
@@ -110,6 +110,10 @@
       .join("");
   }
 
+  // First snapshot after a symbol switch seeds the order ticket's price to something sane for
+  // the new instrument, instead of leaving whatever the previous symbol's price was.
+  let primeTicketPrice = false;
+
   function render(snapshot) {
     const maxDepth = Math.max(
       totalDepth(snapshot.bids),
@@ -117,8 +121,14 @@
     );
     $("asks").innerHTML = ladder(snapshot.asks, "ask", maxDepth);
     $("bids").innerHTML = ladder(snapshot.bids, "bid", maxDepth);
-    renderStats(snapshot);
+    const bestBid = renderStats(snapshot);
     renderTape(snapshot);
+
+    if (primeTicketPrice && bestBid !== null) {
+      $("price").value = bestBid.toFixed(2);
+      updateLabel();
+      primeTicketPrice = false;
+    }
   }
 
   // Snapshots can arrive out of order (a submit response racing an SSE frame); never let an
@@ -161,11 +171,102 @@
     updateLabel();
   }
 
+  // --- Symbol + quote -------------------------------------------------------
+  let currentSymbol = DEFAULT_SYMBOL;
+  let stream = null;
+
+  function formatQuote(q) {
+    const sign = num(q.change) >= 0 ? "▲" : "▼";
+    const cls = num(q.change) >= 0 ? "pos" : "neg";
+    const status = q.marketOpen ? "open" : "closed";
+    return (
+      `${q.name} · ${q.exchange} · ${q.currency} ` +
+      `<span class="${cls}">${sign} ${q.last} (${q.changePercent}%)</span> ` +
+      `· market ${status} · as of ${time(q.asOfMillis)}`
+    );
+  }
+
+  async function loadQuote(symbol) {
+    try {
+      const response = await fetch(`/api/${symbol}/quote`);
+      if (!response.ok) return;
+      const quote = await response.json();
+      $("eyebrow").innerHTML = formatQuote(quote);
+    } catch {
+      // The book itself already streams fine without a label; leave the eyebrow as-is.
+    }
+  }
+
+  let lastEventAt = Date.now();
+  let events = 0;
+
+  function connectStream(symbol) {
+    if (stream) stream.close();
+    prevSize = { bid: {}, ask: {} };
+    lastTradeTime = 0;
+    lastTs = 0;
+    primeTicketPrice = true;
+    events = 0;
+    stream = new EventSource(`/api/${symbol}/stream`);
+    stream.onmessage = (e) => {
+      lastEventAt = Date.now();
+      events += 1;
+      $("msgs").textContent = events;
+      renderIfFresh(JSON.parse(e.data));
+    };
+    stream.onopen = () => setConnected(true);
+    stream.onerror = () => setConnected(false);
+  }
+
+  async function switchSymbol(rawSymbol) {
+    const symbol = rawSymbol.trim().toUpperCase();
+    if (!symbol || symbol === currentSymbol) return;
+    const probe = await fetch(`/api/${symbol}/state`);
+    if (!probe.ok) {
+      const body = await probe.json().catch(() => ({}));
+      $("result").textContent = `✕ ${body.error || "symbol not found"}`;
+      $("result").className = "result err";
+      return;
+    }
+    currentSymbol = symbol;
+    $("symbol-input").value = symbol;
+    const url = new URL(location.href);
+    url.searchParams.set("symbol", symbol);
+    history.replaceState(null, "", url);
+    connectStream(symbol);
+    loadQuote(symbol);
+  }
+
+  async function loadSymbolList() {
+    try {
+      const response = await fetch("/api/symbols");
+      const symbols = await response.json();
+      $("symbol-list").innerHTML = symbols
+        .map((s) => `<option value="${s.symbol}">${s.name}</option>`)
+        .join("");
+    } catch {
+      // The picker still accepts free-text entry without the suggestion list.
+    }
+  }
+
+  // --- Wiring -------------------------------------------------------------
+  $("buy").onclick = () => setSide("BID");
+  $("sell").onclick = () => setSide("OFFER");
+  $("submit").onclick = submitOrder;
+  ["price", "size"].forEach((id) => {
+    const el = $(id);
+    el.oninput = updateLabel;
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitOrder();
+    });
+  });
+  updateLabel();
+
   async function submitOrder() {
     const query = `side=${side}&price=${encodeURIComponent($("price").value)}&size=${encodeURIComponent($("size").value)}`;
     const result = $("result");
     try {
-      const response = await fetch(`/api/${SYMBOL}/order?${query}`, {
+      const response = await fetch(`/api/${currentSymbol}/order?${query}`, {
         method: "POST",
       });
       const data = await response.json();
@@ -186,30 +287,18 @@
     }
   }
 
-  // --- Wiring -------------------------------------------------------------
-  $("buy").onclick = () => setSide("BID");
-  $("sell").onclick = () => setSide("OFFER");
-  $("submit").onclick = submitOrder;
-  ["price", "size"].forEach((id) => {
-    const el = $(id);
-    el.oninput = updateLabel;
-    el.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") submitOrder();
-    });
+  $("symbol-go").onclick = () => switchSymbol($("symbol-input").value);
+  $("symbol-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") switchSymbol($("symbol-input").value);
   });
-  updateLabel();
 
-  let lastEventAt = Date.now();
-  let events = 0;
-  const stream = new EventSource(`/api/${SYMBOL}/stream`);
-  stream.onmessage = (e) => {
-    lastEventAt = Date.now();
-    events += 1;
-    $("msgs").textContent = events;
-    renderIfFresh(JSON.parse(e.data));
-  };
-  stream.onopen = () => setConnected(true);
-  stream.onerror = () => setConnected(false);
+  const initialSymbol =
+    new URLSearchParams(location.search).get("symbol") || DEFAULT_SYMBOL;
+  currentSymbol = initialSymbol.trim().toUpperCase();
+  $("symbol-input").value = currentSymbol;
+  loadSymbolList();
+  connectStream(currentSymbol);
+  loadQuote(currentSymbol);
 
   setInterval(() => {
     const age = (Date.now() - lastEventAt) / 1000;

@@ -10,7 +10,21 @@
     <header class="topbar">
       <div class="brand">
         <span class="mark" aria-hidden="true">&#9670;</span> ORDER BOOK
-        <span class="eyebrow">price-time priority matching engine</span>
+        <span class="eyebrow" id="eyebrow"
+          >price-time priority matching engine</span
+        >
+      </div>
+      <div class="symbol-picker">
+        <input
+          id="symbol-input"
+          list="symbol-list"
+          autocomplete="off"
+          spellcheck="false"
+          maxlength="10"
+          aria-label="Symbol"
+        />
+        <datalist id="symbol-list"></datalist>
+        <button id="symbol-go" type="button">Go</button>
       </div>
       <div class="status">
         <span id="conn" class="dot"></span><span id="connlbl">connecting</span>

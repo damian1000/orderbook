@@ -6,7 +6,7 @@
 
 A small, thread-safe **limit order book** and **price-time-priority matching engine** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications — then submit crossing orders and watch them match.
 
-**▶ Try it live:** https://orderbook.damianhoward.com — submit an order and watch it match resting liquidity and print to the trade tape.
+**▶ Try it live:** https://orderbook.damianhoward.com — pick a real instrument (or type any ticker), submit an order, and watch it match resting liquidity seeded around that instrument's actual last price, printing to the trade tape. Real quotes come from [`market-data`](https://github.com/damian1000/market-data).
 
 ## Problem
 

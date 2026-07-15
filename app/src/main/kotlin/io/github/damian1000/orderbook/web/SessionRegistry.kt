@@ -2,7 +2,10 @@ package io.github.damian1000.orderbook.web
 
 import io.github.damian1000.orderbook.market.Market
 
-/** Thrown for a symbol that fails basic shape validation before any book is created for it. */
+/**
+ * Thrown for a symbol no book can be created for: either it fails basic shape validation, or (see
+ * [main]'s registry factory) it shapes up fine but no real quote can be found for it.
+ */
 class UnknownSymbolException(
     symbol: String,
 ) : IllegalArgumentException("unknown symbol '$symbol'")
@@ -40,6 +43,10 @@ class SessionRegistry(
     /** Number of currently open sessions — for tests asserting the eviction cap holds. */
     val size: Int @Synchronized get() = sessions.size
 
+    /** Symbols with a currently open session — for a periodic quote refresh to iterate over. */
+    @Synchronized
+    fun symbols(): Set<String> = sessions.keys.toSet()
+
     @Synchronized
     fun sessionFor(rawSymbol: String): ManagedSession {
         val symbol = normalize(rawSymbol)
@@ -51,8 +58,8 @@ class SessionRegistry(
 
     companion object {
         // Uppercase alnum plus '.' (share classes, e.g. BRK.B), 1-10 characters: enough to reject
-        // obvious junk before a book is ever created for it. Real-instrument validation (does
-        // this actually resolve to a listed quote) is a later, separate concern.
+        // obvious junk before ever attempting a quote fetch for it. Whether it's a real,
+        // listed instrument is checked afterwards, by the factory that actually fetches one.
         private val VALID_SYMBOL = Regex("^[A-Z][A-Z0-9.]{0,9}$")
 
         fun normalize(raw: String): String {

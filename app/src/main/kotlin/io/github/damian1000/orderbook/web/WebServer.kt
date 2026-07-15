@@ -2,6 +2,8 @@ package io.github.damian1000.orderbook.web
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import io.github.damian1000.marketdata.cache.QuoteCache
+import io.github.damian1000.marketdata.source.YahooQuoteSource
 import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
 import io.github.damian1000.orderbook.kafka.ScramCredentials
 import io.github.damian1000.orderbook.market.CommandListener
@@ -11,10 +13,13 @@ import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
+import io.github.damian1000.orderbook.quote.QuoteSeed
+import io.github.damian1000.orderbook.quote.toJson
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * HTTP transport for a [SessionRegistry]: serves the static UI plus, per symbol, the JSON API and
@@ -23,6 +28,9 @@ import java.util.concurrent.Executors
  * attaches clients to it. Plumbing only — book behaviour lives in the market layer, rendering in
  * the view layer. JDK [HttpServer] on a cached pool, which serves the long-lived SSE streams.
  *
+ * `/api/symbols` lists the curated picker options; `/api/{symbol}/quote` reads the [quotes] cache
+ * a background refresh keeps warm (see [main]) — the displayed reference price, not the book.
+ *
  * Reads are GET; `/api/{symbol}/order` mutates the book, so it is POST-only — a GET that changes
  * state would be prefetchable/cacheable. An unrecognised symbol shape is a 404 (see
  * [UnknownSymbolException]); invalid order input maps to a 400 with a JSON `error` body; anything
@@ -30,6 +38,7 @@ import java.util.concurrent.Executors
  */
 class WebServer(
     private val registry: SessionRegistry,
+    private val quotes: QuoteCache,
     private val assets: WebAssets,
     private val port: Int,
 ) {
@@ -65,6 +74,7 @@ class WebServer(
                 path == "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
                 path == "/app.js" -> get(exchange) { respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs) }
                 path == "/privacy" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.privacyHtml) }
+                path == "/api/symbols" -> get(exchange) { respond(exchange, 200, "application/json", CuratedSymbols.toJson()) }
                 api != null -> routeApi(exchange, api.groupValues[1], api.groupValues[2])
                 else -> respond(exchange, 404, "text/plain", "not found")
             }
@@ -89,10 +99,18 @@ class WebServer(
         action: String,
     ) {
         val managed = registry.sessionFor(rawSymbol)
+        val symbol = SessionRegistry.normalize(rawSymbol)
         when (action) {
             "state" -> get(exchange) { respond(exchange, 200, "application/json", managed.session.snapshot().toJson()) }
             "order" -> post(exchange) { respond(exchange, 200, "application/json", submit(exchange, managed.session)) }
             "stream" -> get(exchange) { managed.broadcaster.stream(exchange, managed.session.snapshot().toJson()) }
+            // The resting book anchors once at session creation; this is the number that keeps
+            // ticking on a schedule (see main's quote-refresh loop) without touching the book.
+            "quote" ->
+                get(exchange) {
+                    val cached = quotes.latest(symbol) ?: error("session exists but no quote cached for $symbol")
+                    respond(exchange, 200, "application/json", cached.quote.toJson())
+                }
         }
     }
 
@@ -180,7 +198,7 @@ class WebServer(
     }
 
     companion object {
-        private val API_PATH = Regex("^/api/([^/]+)/(state|order|stream)$")
+        private val API_PATH = Regex("^/api/([^/]+)/(state|order|stream|quote)$")
     }
 }
 
@@ -200,15 +218,22 @@ fun main() {
                 scram = ScramCredentials.fromEnv(System.getenv()),
             )
         }
+    // The book anchors once, at session creation, to this quote's last price — see QuoteSeed.
+    // The displayed reference price then ticks independently on a schedule (below), without ever
+    // touching resting orders: no real venue reprices a trader's resting limit orders for them.
+    val quotes = QuoteCache(YahooQuoteSource())
     // One session per symbol, created on first request and evicted least-recently-used past the
-    // cap — see SessionRegistry. Each gets its own broadcaster (SSE clients only want their
-    // symbol's frames) and, when egress is on, its own SymbolEgress tagging every record.
+    // cap — see SessionRegistry. A symbol whose quote can't be fetched at all (never resolved
+    // before, and this attempt also failed) is unknown, not a fallback to the synthetic ladder —
+    // this feature exists to show real prices, so a book must never silently fake one.
     val registry =
         SessionRegistry { symbol ->
+            val cached = quotes.refresh(symbol) ?: throw UnknownSymbolException(symbol)
             val broadcaster = SseBroadcaster()
             val symbolEgress = egress?.forSymbol(symbol)
             val session =
                 MarketSession(
+                    seed = QuoteSeed.around(cached.quote),
                     fills = symbolEgress ?: FillListener.NONE,
                     commands = symbolEgress ?: CommandListener.NONE,
                     // SSE frames leave from the depth stream on the writer thread — see DepthBroadcast.
@@ -217,16 +242,30 @@ fun main() {
             broadcaster.startHeartbeat()
             ManagedSession(session, broadcaster)
         }
-    val server = WebServer(registry, WebAssets.load(), port)
+    // Keeps every currently open symbol's displayed quote fresh without a client ever triggering
+    // a Yahoo call itself; a transient failure here just leaves quotes.latest() at the last-good
+    // value (QuoteCache's own contract), so a blip never blanks an already-open book's label.
+    val quoteRefresh =
+        Executors.newSingleThreadScheduledExecutor { Thread(it, "quote-refresh").apply { isDaemon = true } }
+    quoteRefresh.scheduleWithFixedDelay(
+        { registry.symbols().forEach { symbol -> runCatching { quotes.refresh(symbol) } } },
+        QUOTE_REFRESH_INTERVAL_SECONDS,
+        QUOTE_REFRESH_INTERVAL_SECONDS,
+        TimeUnit.SECONDS,
+    )
+    val server = WebServer(registry, quotes, WebAssets.load(), port)
     // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
     // then every open session's broadcaster heartbeat and writer thread are released, and the
     // egress flushes what it holds before the producer closes.
     Runtime.getRuntime().addShutdownHook(
         Thread {
             server.stop()
+            quoteRefresh.shutdownNow()
             registry.close()
             egress?.close()
         },
     )
     server.start()
 }
+
+private const val QUOTE_REFRESH_INTERVAL_SECONDS = 30L

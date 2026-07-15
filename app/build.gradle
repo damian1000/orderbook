@@ -32,10 +32,13 @@ application {
 
 repositories {
     mavenCentral()
+    maven { url = uri('https://jitpack.io') } // market-data builds from its git tag
 }
 
 dependencies {
     implementation project(':core')
+    // Real instrument quotes to seed and label the live book — see QuoteSeed.
+    implementation 'com.github.damian1000:market-data:v1.0.0'
     // Egress only — Kafka attaches at the edge (KafkaMarketEgress), never the match path.
     implementation 'org.apache.kafka:kafka-clients:4.3.1'
     // kafka-clients logs via slf4j; a binding routes producer warnings to stderr -> journalctl.
