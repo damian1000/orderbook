@@ -23,26 +23,30 @@ import java.net.http.HttpResponse
  * end (routing, method enforcement, error mapping, SSE), not mocked.
  */
 class WebServerTest {
-    private lateinit var session: MarketSession
-    private lateinit var broadcaster: SseBroadcaster
+    private lateinit var registry: SessionRegistry
     private lateinit var server: WebServer
     private val client: HttpClient = HttpClient.newHttpClient()
 
     @BeforeEach
     fun start() {
-        broadcaster = SseBroadcaster()
         // Same wiring as main(): SSE frames come from the market's depth stream, not from the
-        // HTTP handler, so the stream test below exercises the real push path.
-        session = MarketSession(depth = DepthBroadcast(broadcaster))
-        server = WebServer(session, WebAssets.load(), broadcaster, port = 0)
+        // HTTP handler, so the stream test below exercises the real push path. One book per
+        // symbol, lazily created on first request.
+        registry =
+            SessionRegistry { _ ->
+                val broadcaster = SseBroadcaster()
+                val session = MarketSession(depth = DepthBroadcast(broadcaster))
+                broadcaster.startHeartbeat()
+                ManagedSession(session, broadcaster)
+            }
+        server = WebServer(registry, WebAssets.load(), port = 0)
         server.start()
     }
 
     @AfterEach
     fun stop() {
         server.stop()
-        broadcaster.close()
-        session.close()
+        registry.close()
     }
 
     private fun request(
@@ -81,7 +85,7 @@ class WebServerTest {
 
     @Test
     fun `state returns the book as JSON`() {
-        val response = request("GET", "/api/state")
+        val response = request("GET", "/api/SIM/state")
         assertEquals(200, response.statusCode())
         assertTrue(response.body().contains("\"bids\":["))
         assertTrue(response.body().contains("\"asks\":["))
@@ -94,59 +98,59 @@ class WebServerTest {
 
     @Test
     fun `a valid order submits and reports fills`() {
-        val response = request("POST", "/api/order?side=BUY&price=102.00&size=3")
+        val response = request("POST", "/api/SIM/order?side=BUY&price=102.00&size=3")
         assertEquals(200, response.statusCode())
         assertTrue(response.body().startsWith("""{"matched":"""))
     }
 
     @Test
     fun `order submission rejects GET - state changes are POST-only`() {
-        val response = request("GET", "/api/order?side=BUY&price=100&size=1")
+        val response = request("GET", "/api/SIM/order?side=BUY&price=100&size=1")
         assertEquals(405, response.statusCode())
         assertEquals("POST", response.headers().firstValue("Allow").get())
     }
 
     @Test
     fun `read endpoints reject non-GET methods`() {
-        assertEquals(405, request("POST", "/api/state").statusCode())
+        assertEquals(405, request("POST", "/api/SIM/state").statusCode())
         assertEquals(405, request("DELETE", "/healthz").statusCode())
     }
 
     @Test
     fun `an unknown side is a 400, not a silent sell`() {
-        val response = request("POST", "/api/order?side=BANANA&price=100&size=1")
+        val response = request("POST", "/api/SIM/order?side=BANANA&price=100&size=1")
         assertEquals(400, response.statusCode())
         assertTrue(response.body().contains("\"error\""))
     }
 
     @Test
     fun `a missing parameter is a 400`() {
-        assertEquals(400, request("POST", "/api/order?side=BUY&size=1").statusCode())
-        assertEquals(400, request("POST", "/api/order?side=BUY&price=100").statusCode())
+        assertEquals(400, request("POST", "/api/SIM/order?side=BUY&size=1").statusCode())
+        assertEquals(400, request("POST", "/api/SIM/order?side=BUY&price=100").statusCode())
     }
 
     @Test
     fun `a non-positive size is a 400`() {
-        val response = request("POST", "/api/order?side=BUY&price=100&size=0")
+        val response = request("POST", "/api/SIM/order?side=BUY&price=100&size=0")
         assertEquals(400, response.statusCode())
         assertTrue(response.body().contains("\"error\""))
     }
 
     @Test
     fun `a malformed size is a 400`() {
-        assertEquals(400, request("POST", "/api/order?side=BUY&price=100&size=lots").statusCode())
+        assertEquals(400, request("POST", "/api/SIM/order?side=BUY&price=100&size=lots").statusCode())
     }
 
     @Test
     fun `an over-precise price is a 400`() {
-        val response = request("POST", "/api/order?side=BUY&price=1.123456789&size=1")
+        val response = request("POST", "/api/SIM/order?side=BUY&price=1.123456789&size=1")
         assertEquals(400, response.statusCode())
         assertTrue(response.body().contains("\"error\""))
     }
 
     @Test
     fun `a malformed price is a 400`() {
-        assertEquals(400, request("POST", "/api/order?side=BUY&price=abc&size=1").statusCode())
+        assertEquals(400, request("POST", "/api/SIM/order?side=BUY&price=abc&size=1").statusCode())
     }
 
     @Test
@@ -161,32 +165,51 @@ class WebServerTest {
 
                 override fun snapshot(): MarketSnapshot = throw IllegalStateException("boom")
             }
-        val failingServer = WebServer(failing, WebAssets.load(), SseBroadcaster(), port = 0)
+        val failingRegistry = SessionRegistry { _ -> ManagedSession(failing, SseBroadcaster()) }
+        val failingServer = WebServer(failingRegistry, WebAssets.load(), port = 0)
         failingServer.start()
         try {
             val request =
                 HttpRequest
-                    .newBuilder(URI("http://localhost:${failingServer.boundPort}/api/state"))
+                    .newBuilder(URI("http://localhost:${failingServer.boundPort}/api/SIM/state"))
                     .build()
             val response = client.send(request, HttpResponse.BodyHandlers.ofString())
             assertEquals(500, response.statusCode())
             assertTrue(response.body().contains("\"error\""))
         } finally {
             failingServer.stop()
+            failingRegistry.close()
         }
     }
 
     @Test
     fun `the SSE stream sends the initial snapshot and pushes submitted orders`() {
-        val connection = URI("http://localhost:${server.boundPort}/api/stream").toURL().openConnection() as HttpURLConnection
+        val connection = URI("http://localhost:${server.boundPort}/api/SIM/stream").toURL().openConnection() as HttpURLConnection
         connection.readTimeout = 5_000
         connection.inputStream.bufferedReader().use { reader ->
             assertTrue(dataFrame(reader).contains("\"bids\":["), "initial snapshot expected on connect")
 
-            request("POST", "/api/order?side=BUY&price=102.00&size=1")
+            request("POST", "/api/SIM/order?side=BUY&price=102.00&size=1")
             assertTrue(dataFrame(reader).contains("\"tape\":["), "broadcast snapshot expected after a submit")
         }
         connection.disconnect()
+    }
+
+    @Test
+    fun `each symbol gets its own book - a fill on one leaves another untouched`() {
+        request("POST", "/api/AAPL/order?side=BUY&price=100.50&size=2")
+        request("POST", "/api/AAPL/order?side=SELL&price=100.50&size=2")
+
+        val aapl = request("GET", "/api/AAPL/state")
+        val msft = request("GET", "/api/MSFT/state")
+        assertTrue(aapl.body().contains("\"tape\":[{"), "AAPL should show the fill just submitted")
+        assertTrue(msft.body().contains("\"tape\":[]"), "a fresh MSFT book should have no trades yet")
+    }
+
+    @Test
+    fun `an unrecognised symbol shape is a 404, not a book`() {
+        assertEquals(404, request("GET", "/api/@@@/state").statusCode())
+        assertEquals(404, request("GET", "/api//state").statusCode())
     }
 
     private fun dataFrame(reader: BufferedReader): String {

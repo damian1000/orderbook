@@ -26,36 +26,39 @@ import java.util.concurrent.atomic.AtomicLong
  * queue is full — broker down, network slow — the oldest pending event is dropped and counted
  * rather than blocking the writer: the live book must not degrade because the egress is sick.
  *
- * Records are versioned JSON keyed by symbol, so per-symbol ordering holds once multiple
- * instruments exist. Delivery is at-least-once while the broker is reachable; the [dropped]
- * counter is the honest record of any gap. A gap matters differently per topic: the tape is a
- * rebuildable view and each depth snapshot supersedes the last, but a command log with a hole
- * no longer replays to the live book's state — the counter is what says whether a log is
- * replayable.
+ * One producer is shared across every symbol's [MarketSession] — [fill]/[submit]/[depth] take the
+ * symbol per call rather than fixing it at construction, so a single egress instance serves the
+ * whole [SessionRegistry]. A [MarketSession] itself stays symbol-agnostic; [forSymbol] hands it
+ * a [SymbolEgress] that closes over one symbol and implements the plain listener seams.
+ *
+ * Records are versioned JSON keyed by symbol, so per-symbol ordering holds across instruments.
+ * Delivery is at-least-once while the broker is reachable; the [dropped] counter is the honest
+ * record of any gap. A gap matters differently per topic: the tape is a rebuildable view and each
+ * depth snapshot supersedes the last, but a command log with a hole no longer replays to the live
+ * book's state — the counter is what says whether a log is replayable.
  */
 class KafkaMarketEgress(
     private val producer: Producer<String, String>,
     private val fillsTopic: String = DEFAULT_FILLS_TOPIC,
     private val commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
     private val l2Topic: String = DEFAULT_L2_TOPIC,
-    private val symbol: String = DEFAULT_SYMBOL,
     queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
-) : FillListener,
-    CommandListener,
-    DepthListener,
-    AutoCloseable {
+) : AutoCloseable {
     private sealed interface Pending
 
     private data class PendingFill(
+        val symbol: String,
         val trade: Trade,
         val timeMillis: Long,
     ) : Pending
 
     private data class PendingCommand(
+        val symbol: String,
         val command: SubmitCommand,
     ) : Pending
 
     private data class PendingDepth(
+        val symbol: String,
         val snapshot: MarketSnapshot,
     ) : Pending
 
@@ -83,14 +86,24 @@ class KafkaMarketEgress(
         egress.start()
     }
 
-    override fun onFill(
+    fun fill(
+        symbol: String,
         trade: Trade,
         timeMillis: Long,
-    ) = enqueue(PendingFill(trade, timeMillis))
+    ) = enqueue(PendingFill(symbol, trade, timeMillis))
 
-    override fun onSubmit(command: SubmitCommand) = enqueue(PendingCommand(command))
+    fun submit(
+        symbol: String,
+        command: SubmitCommand,
+    ) = enqueue(PendingCommand(symbol, command))
 
-    override fun onDepth(snapshot: MarketSnapshot) = enqueue(PendingDepth(snapshot))
+    fun depth(
+        symbol: String,
+        snapshot: MarketSnapshot,
+    ) = enqueue(PendingDepth(symbol, snapshot))
+
+    /** The listener seam a single symbol's [MarketSession] is wired to. */
+    fun forSymbol(symbol: String): SymbolEgress = SymbolEgress(symbol, this)
 
     private fun enqueue(event: Pending) {
         // Drop-oldest, never block: shedding the stalest event keeps the stream current and the
@@ -126,9 +139,9 @@ class KafkaMarketEgress(
     private fun send(event: Pending) {
         val record =
             when (event) {
-                is PendingFill -> ProducerRecord(fillsTopic, symbol, fillJson(event))
-                is PendingCommand -> ProducerRecord(commandsTopic, symbol, commandJson(event.command))
-                is PendingDepth -> ProducerRecord(l2Topic, symbol, depthJson(event.snapshot))
+                is PendingFill -> ProducerRecord(fillsTopic, event.symbol, fillJson(event))
+                is PendingCommand -> ProducerRecord(commandsTopic, event.symbol, commandJson(event))
+                is PendingDepth -> ProducerRecord(l2Topic, event.symbol, depthJson(event))
             }
         try {
             producer.send(record) { _, exception ->
@@ -143,17 +156,20 @@ class KafkaMarketEgress(
 
     private fun fillJson(fill: PendingFill): String {
         val trade = fill.trade
-        return """{"v":1,"symbol":${quote(symbol)},"price":${quote(trade.price.toString())},"size":${trade.size},""" +
+        return """{"v":1,"symbol":${quote(fill.symbol)},"price":${quote(trade.price.toString())},"size":${trade.size},""" +
             """"makerOrderId":${trade.restingOrderId},"takerOrderId":${trade.incomingOrderId},""" +
             """"aggressor":${quote(trade.incomingSide.name)},"ts":${fill.timeMillis}}"""
     }
 
-    private fun commandJson(command: SubmitCommand): String =
-        """{"v":1,"symbol":${quote(symbol)},"side":${quote(command.side.name)},""" +
+    private fun commandJson(pending: PendingCommand): String {
+        val command = pending.command
+        return """{"v":1,"symbol":${quote(pending.symbol)},"side":${quote(command.side.name)},""" +
             """"price":${quote(command.price.toString())},"size":${command.size},"ts":${command.timeMillis}}"""
+    }
 
     // The book body comes from the view layer's serialisation; the egress adds only its envelope.
-    private fun depthJson(snapshot: MarketSnapshot): String = """{"v":1,"symbol":${quote(symbol)},""" + snapshot.depthJson().drop(1)
+    private fun depthJson(pending: PendingDepth): String =
+        """{"v":1,"symbol":${quote(pending.symbol)},""" + pending.snapshot.depthJson().drop(1)
 
     private fun quote(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
@@ -161,7 +177,6 @@ class KafkaMarketEgress(
         const val DEFAULT_FILLS_TOPIC = "orderbook.fills"
         const val DEFAULT_COMMANDS_TOPIC = "orderbook.commands"
         const val DEFAULT_L2_TOPIC = "orderbook.l2"
-        const val DEFAULT_SYMBOL = "SIM"
         const val DEFAULT_QUEUE_CAPACITY = 4096
         private val CLOSE_TIMEOUT = Duration.ofSeconds(5)
 
@@ -174,11 +189,10 @@ class KafkaMarketEgress(
             fillsTopic: String = DEFAULT_FILLS_TOPIC,
             commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
             l2Topic: String = DEFAULT_L2_TOPIC,
-            symbol: String = DEFAULT_SYMBOL,
             scram: ScramCredentials? = null,
         ): KafkaMarketEgress {
             val producer = KafkaProducer(producerProperties(bootstrapServers, scram), StringSerializer(), StringSerializer())
-            return KafkaMarketEgress(producer, fillsTopic, commandsTopic, l2Topic, symbol).also { it.start() }
+            return KafkaMarketEgress(producer, fillsTopic, commandsTopic, l2Topic).also { it.start() }
         }
 
         internal fun producerProperties(
@@ -208,4 +222,25 @@ class KafkaMarketEgress(
         // JAAS values are double-quoted strings; escape the two characters that break out of one.
         private fun jaasQuote(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
     }
+}
+
+/**
+ * The plain [FillListener]/[CommandListener]/[DepthListener] seam a symbol-agnostic
+ * [io.github.damian1000.orderbook.market.MarketSession] is wired to — closes over one symbol so
+ * the shared [egress] tags every record with it. Obtain one via [KafkaMarketEgress.forSymbol].
+ */
+class SymbolEgress(
+    private val symbol: String,
+    private val egress: KafkaMarketEgress,
+) : FillListener,
+    CommandListener,
+    DepthListener {
+    override fun onFill(
+        trade: Trade,
+        timeMillis: Long,
+    ) = egress.fill(symbol, trade, timeMillis)
+
+    override fun onSubmit(command: SubmitCommand) = egress.submit(symbol, command)
+
+    override fun onDepth(snapshot: MarketSnapshot) = egress.depth(symbol, snapshot)
 }

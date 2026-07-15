@@ -46,9 +46,16 @@ class KafkaEgressIntegrationTest {
     @Test
     fun `a fresh book replayed from the consumed command log equals the live book`() {
         val egress = KafkaMarketEgress.create(kafka.bootstrapServers)
+        val symbolEgress = egress.forSymbol("SIM")
         var now = 1_000L
         val live =
-            MarketSession(seed = seed, clock = { now }, fills = egress, commands = egress, depth = egress).use { session ->
+            MarketSession(
+                seed = seed,
+                clock = { now },
+                fills = symbolEgress,
+                commands = symbolEgress,
+                depth = symbolEgress,
+            ).use { session ->
                 session.submit(Side.BID, Price.of("101.00"), 5)
                 now = 2_000L
                 session.submit(Side.OFFER, Price.of("100.50"), 4)

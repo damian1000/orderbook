@@ -36,7 +36,7 @@ class KafkaMarketEgressTest {
     fun `publishes a fill as versioned JSON keyed by symbol on the fills topic`() {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
-        egress.onFill(trade, 1_000L)
+        egress.fill("SIM", trade, 1_000L)
         egress.close()
 
         val record = producer.history().single()
@@ -54,7 +54,7 @@ class KafkaMarketEgressTest {
     fun `publishes an accepted command as versioned JSON on the commands topic`() {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
-        egress.onSubmit(command)
+        egress.submit("SIM", command)
         egress.close()
 
         val record = producer.history().single()
@@ -70,7 +70,7 @@ class KafkaMarketEgressTest {
     fun `publishes the latest depth as the view layer's book JSON in the egress envelope`() {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
-        egress.onDepth(snapshot)
+        egress.depth("SIM", snapshot)
         egress.close()
 
         val record = producer.history().single()
@@ -84,13 +84,37 @@ class KafkaMarketEgressTest {
     }
 
     @Test
+    fun `each symbol's records are keyed with its own symbol, not a shared default`() {
+        val producer = producer()
+        val egress = KafkaMarketEgress(producer)
+        egress.fill("AAPL", trade, 1_000L)
+        egress.fill("MSFT", trade, 1_000L)
+        egress.close()
+
+        assertEquals(listOf("AAPL", "MSFT"), producer.history().map { it.key() })
+    }
+
+    @Test
+    fun `forSymbol hands a MarketSession the plain listener seams tagged with one symbol`() {
+        val producer = producer()
+        val egress = KafkaMarketEgress(producer)
+        val symbolEgress = egress.forSymbol("AAPL")
+        symbolEgress.onFill(trade, 1_000L)
+        symbolEgress.onSubmit(command)
+        symbolEgress.onDepth(snapshot)
+        egress.close()
+
+        assertTrue(producer.history().all { it.key() == "AAPL" }, "every record should carry the bound symbol")
+    }
+
+    @Test
     fun `events interleave onto their own topics in submission order`() {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
-        egress.onSubmit(command)
-        egress.onFill(trade, 1_000L)
-        egress.onDepth(snapshot)
-        egress.onSubmit(command.copy(size = 3, timeMillis = 2_000L))
+        egress.submit("SIM", command)
+        egress.fill("SIM", trade, 1_000L)
+        egress.depth("SIM", snapshot)
+        egress.submit("SIM", command.copy(size = 3, timeMillis = 2_000L))
         egress.close()
 
         assertEquals(
@@ -105,7 +129,7 @@ class KafkaMarketEgressTest {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
         egress.start()
-        egress.onFill(trade, 1_000L)
+        egress.fill("SIM", trade, 1_000L)
 
         val deadline = System.nanoTime() + 5_000_000_000L
         while (producer.history().isEmpty() && System.nanoTime() < deadline) {
@@ -120,9 +144,9 @@ class KafkaMarketEgressTest {
         val producer = producer()
         // Not started: nothing drains, so capacity 1 forces the drop path deterministically.
         val egress = KafkaMarketEgress(producer, queueCapacity = 1)
-        egress.onFill(trade, 1L)
-        egress.onFill(trade.copy(incomingOrderId = 10), 2L)
-        egress.onFill(trade.copy(incomingOrderId = 11), 3L)
+        egress.fill("SIM", trade, 1L)
+        egress.fill("SIM", trade.copy(incomingOrderId = 10), 2L)
+        egress.fill("SIM", trade.copy(incomingOrderId = 11), 3L)
 
         assertEquals(2, egress.dropped, "two older fills should have been shed")
         egress.close()
@@ -134,7 +158,7 @@ class KafkaMarketEgressTest {
     fun `a failed send is counted, never thrown`() {
         val producer = producer(autoComplete = false)
         val egress = KafkaMarketEgress(producer)
-        egress.onFill(trade, 1L)
+        egress.fill("SIM", trade, 1L)
         egress.close()
 
         assertTrue(producer.errorNext(RuntimeException("broker down")), "a send should be pending")

@@ -7,6 +7,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const DASH = "—";
+  // Fixed until the symbol picker lands: the server already routes any symbol under /api/{symbol}.
+  const SYMBOL = "SIM";
 
   const num = (s) => parseFloat(s);
   const price2 = (s) => num(s).toFixed(2);
@@ -163,7 +165,9 @@
     const query = `side=${side}&price=${encodeURIComponent($("price").value)}&size=${encodeURIComponent($("size").value)}`;
     const result = $("result");
     try {
-      const response = await fetch(`/api/order?${query}`, { method: "POST" });
+      const response = await fetch(`/api/${SYMBOL}/order?${query}`, {
+        method: "POST",
+      });
       const data = await response.json();
       if (data.error) {
         result.textContent = `✕ ${data.error}`;
@@ -197,7 +201,7 @@
 
   let lastEventAt = Date.now();
   let events = 0;
-  const stream = new EventSource("/api/stream");
+  const stream = new EventSource(`/api/${SYMBOL}/stream`);
   stream.onmessage = (e) => {
     lastEventAt = Date.now();
     events += 1;

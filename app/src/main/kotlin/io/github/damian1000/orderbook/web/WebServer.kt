@@ -17,20 +17,20 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * HTTP transport for a [Market]: serves the static UI, the JSON API, and the SSE stream endpoint.
- * Live frames reach the [Broadcaster] from the market's depth stream via [DepthBroadcast] (wired
- * where the session is built — see [main]); this class only attaches clients to it. Plumbing only —
- * book behaviour lives in the market layer, rendering in the view layer. JDK [HttpServer] on a
- * cached pool, which serves the long-lived SSE streams.
+ * HTTP transport for a [SessionRegistry]: serves the static UI plus, per symbol, the JSON API and
+ * the SSE stream endpoint. Live frames reach each symbol's [Broadcaster] from its market's depth
+ * stream via [DepthBroadcast] (wired where the session is built — see [main]); this class only
+ * attaches clients to it. Plumbing only — book behaviour lives in the market layer, rendering in
+ * the view layer. JDK [HttpServer] on a cached pool, which serves the long-lived SSE streams.
  *
- * Reads are GET; `/api/order` mutates the book, so it is POST-only — a GET that changes state
- * would be prefetchable/cacheable. Invalid input maps to a 400 with a JSON `error` body; anything
+ * Reads are GET; `/api/{symbol}/order` mutates the book, so it is POST-only — a GET that changes
+ * state would be prefetchable/cacheable. An unrecognised symbol shape is a 404 (see
+ * [UnknownSymbolException]); invalid order input maps to a 400 with a JSON `error` body; anything
  * unexpected maps to a 500.
  */
 class WebServer(
-    private val session: Market,
+    private val registry: SessionRegistry,
     private val assets: WebAssets,
-    private val broadcaster: Broadcaster,
     private val port: Int,
 ) {
     private lateinit var server: HttpServer
@@ -42,7 +42,6 @@ class WebServer(
         executor = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
         server.executor = executor
         server.createContext("/", ::route)
-        broadcaster.startHeartbeat()
         server.start()
         println("Order book server listening on :$boundPort")
     }
@@ -58,17 +57,19 @@ class WebServer(
 
     private fun route(exchange: HttpExchange) {
         try {
-            when (exchange.requestURI.path) {
-                "/healthz" -> get(exchange) { respond(exchange, 200, "text/plain", "ok") }
-                "/" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml) }
-                "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
-                "/app.js" -> get(exchange) { respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs) }
-                "/privacy" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.privacyHtml) }
-                "/api/state" -> get(exchange) { respond(exchange, 200, "application/json", session.snapshot().toJson()) }
-                "/api/order" -> post(exchange) { respond(exchange, 200, "application/json", submit(exchange)) }
-                "/api/stream" -> get(exchange) { broadcaster.stream(exchange, session.snapshot().toJson()) }
+            val path = exchange.requestURI.path
+            val api = API_PATH.matchEntire(path)
+            when {
+                path == "/healthz" -> get(exchange) { respond(exchange, 200, "text/plain", "ok") }
+                path == "/" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml) }
+                path == "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
+                path == "/app.js" -> get(exchange) { respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs) }
+                path == "/privacy" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.privacyHtml) }
+                api != null -> routeApi(exchange, api.groupValues[1], api.groupValues[2])
                 else -> respond(exchange, 404, "text/plain", "not found")
             }
+        } catch (e: UnknownSymbolException) {
+            respond(exchange, 404, "application/json", """{"error":${jsonString(e.message ?: "unknown symbol")}}""")
         } catch (e: IllegalArgumentException) {
             respond(exchange, 400, "application/json", """{"error":${jsonString(e.message ?: "bad request")}}""")
         } catch (e: Exception) {
@@ -80,7 +81,25 @@ class WebServer(
         }
     }
 
-    private fun submit(exchange: HttpExchange): String {
+    // The symbol resolves to its ManagedSession (creating or evicting via the registry) before the
+    // method check, so an unknown symbol reads as a 404 regardless of verb.
+    private fun routeApi(
+        exchange: HttpExchange,
+        rawSymbol: String,
+        action: String,
+    ) {
+        val managed = registry.sessionFor(rawSymbol)
+        when (action) {
+            "state" -> get(exchange) { respond(exchange, 200, "application/json", managed.session.snapshot().toJson()) }
+            "order" -> post(exchange) { respond(exchange, 200, "application/json", submit(exchange, managed.session)) }
+            "stream" -> get(exchange) { managed.broadcaster.stream(exchange, managed.session.snapshot().toJson()) }
+        }
+    }
+
+    private fun submit(
+        exchange: HttpExchange,
+        session: Market,
+    ): String {
         val params = queryParams(exchange.requestURI.rawQuery)
         val side = parseSide(params["side"])
         val price = parsePrice(params["price"])
@@ -159,6 +178,10 @@ class WebServer(
         exchange.sendResponseHeaders(status, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
     }
+
+    companion object {
+        private val API_PATH = Regex("^/api/([^/]+)/(state|order|stream)$")
+    }
 }
 
 fun main() {
@@ -174,27 +197,34 @@ fun main() {
                 fillsTopic = System.getenv("KAFKA_FILLS_TOPIC") ?: KafkaMarketEgress.DEFAULT_FILLS_TOPIC,
                 commandsTopic = System.getenv("KAFKA_COMMANDS_TOPIC") ?: KafkaMarketEgress.DEFAULT_COMMANDS_TOPIC,
                 l2Topic = System.getenv("KAFKA_L2_TOPIC") ?: KafkaMarketEgress.DEFAULT_L2_TOPIC,
-                symbol = System.getenv("ORDERBOOK_SYMBOL") ?: KafkaMarketEgress.DEFAULT_SYMBOL,
                 scram = ScramCredentials.fromEnv(System.getenv()),
             )
         }
-    val broadcaster = SseBroadcaster()
-    val session =
-        MarketSession(
-            fills = egress ?: FillListener.NONE,
-            commands = egress ?: CommandListener.NONE,
-            // SSE frames leave from the depth stream on the writer thread — see DepthBroadcast.
-            depth = DepthListener.tee(egress ?: DepthListener.NONE, DepthBroadcast(broadcaster)),
-        )
-    val server = WebServer(session, WebAssets.load(), broadcaster, port)
+    // One session per symbol, created on first request and evicted least-recently-used past the
+    // cap — see SessionRegistry. Each gets its own broadcaster (SSE clients only want their
+    // symbol's frames) and, when egress is on, its own SymbolEgress tagging every record.
+    val registry =
+        SessionRegistry { symbol ->
+            val broadcaster = SseBroadcaster()
+            val symbolEgress = egress?.forSymbol(symbol)
+            val session =
+                MarketSession(
+                    fills = symbolEgress ?: FillListener.NONE,
+                    commands = symbolEgress ?: CommandListener.NONE,
+                    // SSE frames leave from the depth stream on the writer thread — see DepthBroadcast.
+                    depth = DepthListener.tee(symbolEgress ?: DepthListener.NONE, DepthBroadcast(broadcaster)),
+                )
+            broadcaster.startHeartbeat()
+            ManagedSession(session, broadcaster)
+        }
+    val server = WebServer(registry, WebAssets.load(), port)
     // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
-    // then the broadcaster's heartbeat and the session's writer thread are released, and the
+    // then every open session's broadcaster heartbeat and writer thread are released, and the
     // egress flushes what it holds before the producer closes.
     Runtime.getRuntime().addShutdownHook(
         Thread {
             server.stop()
-            broadcaster.close()
-            session.close()
+            registry.close()
             egress?.close()
         },
     )
