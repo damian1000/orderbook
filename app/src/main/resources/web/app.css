@@ -666,3 +666,11 @@ a:hover {
 .prose p:last-child {
   margin-bottom: 0;
 }
+
+/* Embedded as a trading-desk tab (?embed=1): the desk supplies the outer chrome, so hide the
+   brand and status bars. The symbol picker stays — it's how the tab switches symbol. */
+.embedded .topbar .brand,
+.embedded .topbar .status,
+.embedded .statusbar {
+  display: none;
+}

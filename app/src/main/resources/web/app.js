@@ -4,6 +4,12 @@
 
 "use strict";
 
+// Embedded as a trading-desk tab (?embed=1): the desk supplies the outer chrome, so hide this
+// app's own topbar/status bar (see app.css .embedded). Standalone, the class is never added.
+if (new URLSearchParams(location.search).has("embed")) {
+  document.body.classList.add("embedded");
+}
+
 (() => {
   const $ = (id) => document.getElementById(id);
   const DASH = "—";
@@ -188,7 +194,7 @@
 
   async function loadQuote(symbol) {
     try {
-      const response = await fetch(`/api/${symbol}/quote`);
+      const response = await fetch(`api/${symbol}/quote`);
       if (!response.ok) return;
       const quote = await response.json();
       $("eyebrow").innerHTML = formatQuote(quote);
@@ -207,7 +213,7 @@
     lastTs = 0;
     primeTicketPrice = true;
     events = 0;
-    stream = new EventSource(`/api/${symbol}/stream`);
+    stream = new EventSource(`api/${symbol}/stream`);
     stream.onmessage = (e) => {
       lastEventAt = Date.now();
       events += 1;
@@ -221,7 +227,7 @@
   async function switchSymbol(rawSymbol) {
     const symbol = rawSymbol.trim().toUpperCase();
     if (!symbol || symbol === currentSymbol) return;
-    const probe = await fetch(`/api/${symbol}/state`);
+    const probe = await fetch(`api/${symbol}/state`);
     if (!probe.ok) {
       const body = await probe.json().catch(() => ({}));
       $("result").textContent = `✕ ${body.error || "symbol not found"}`;
@@ -239,7 +245,7 @@
 
   async function loadSymbolList() {
     try {
-      const response = await fetch("/api/symbols");
+      const response = await fetch("api/symbols");
       const symbols = await response.json();
       $("symbol-list").innerHTML = symbols
         .map((s) => `<option value="${s.symbol}">${s.name}</option>`)
@@ -266,7 +272,7 @@
     const query = `side=${side}&price=${encodeURIComponent($("price").value)}&size=${encodeURIComponent($("size").value)}`;
     const result = $("result");
     try {
-      const response = await fetch(`/api/${currentSymbol}/order?${query}`, {
+      const response = await fetch(`api/${currentSymbol}/order?${query}`, {
         method: "POST",
       });
       const data = await response.json();
