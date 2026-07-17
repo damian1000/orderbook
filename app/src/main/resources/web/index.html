@@ -14,7 +14,14 @@
           >price-time priority matching engine</span
         >
       </div>
-      <div class="symbol-picker">
+      <div class="status">
+        <span id="conn" class="dot"></span><span id="connlbl">connecting</span>
+      </div>
+    </header>
+
+    <div class="stats">
+      <div class="stat stat-symbol">
+        <span class="k">Symbol</span>
         <input
           id="symbol-input"
           list="symbol-list"
@@ -24,14 +31,7 @@
           aria-label="Symbol"
         />
         <datalist id="symbol-list"></datalist>
-        <button id="symbol-go" type="button">Go</button>
       </div>
-      <div class="status">
-        <span id="conn" class="dot"></span><span id="connlbl">connecting</span>
-      </div>
-    </header>
-
-    <div class="stats">
       <div class="stat">
         <span class="k">Last</span><span class="v" id="st-last">&mdash;</span>
       </div>
@@ -100,12 +100,12 @@
           <label
             >Size<input
               id="size"
-              value="10"
+              value="100"
               inputmode="numeric"
               autocomplete="off"
           /></label>
           <button id="submit" class="submit buy" type="button">
-            Buy 10 @ 101.00
+            Buy 100 @ 101.00
           </button>
           <div
             id="result"

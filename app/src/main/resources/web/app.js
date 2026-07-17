@@ -17,6 +17,7 @@ if (new URLSearchParams(location.search).has("embed")) {
 
   const num = (s) => parseFloat(s);
   const price2 = (s) => num(s).toFixed(2);
+  const qty = (n) => n.toLocaleString("en-US");
   const time = (ms) => {
     const d = new Date(ms);
     const p = (n) => String(n).padStart(2, "0");
@@ -47,8 +48,8 @@ if (new URLSearchParams(location.search).has("embed")) {
           `<div class="row${flash}" style="--w:${width}%">` +
           `<span class="bar"></span>` +
           `<span class="px">${price2(level.price)}</span>` +
-          `<span class="sz">${level.size}</span>` +
-          `<span class="tot">${level.cumulative}</span>` +
+          `<span class="sz">${qty(level.size)}</span>` +
+          `<span class="tot">${qty(level.cumulative)}</span>` +
           `</div>`
         );
       })
@@ -83,7 +84,9 @@ if (new URLSearchParams(location.search).has("embed")) {
       lastEl.textContent = price2(last.price);
       lastEl.className = `v ${last.side === "BID" ? "pos up" : "neg down"}`;
     } else {
-      lastEl.textContent = DASH;
+      // No trades yet: show the instrument's real last price (from the quote that seeded the
+      // book) rather than a dash, unstyled since it isn't one of our fills.
+      lastEl.textContent = quoteLast !== null ? quoteLast.toFixed(2) : DASH;
       lastEl.className = "v";
     }
     return bestBid;
@@ -109,7 +112,7 @@ if (new URLSearchParams(location.search).has("embed")) {
           `<span class="tt">${time(t.time)}</span>` +
           `<span class="ts">${buy ? "BUY" : "SELL"}</span>` +
           `<span class="tp">${price2(t.price)}</span>` +
-          `<span class="tz">${t.size}</span>` +
+          `<span class="tz">${qty(t.size)}</span>` +
           `</div>`
         );
       })
@@ -180,6 +183,8 @@ if (new URLSearchParams(location.search).has("embed")) {
   // --- Symbol + quote -------------------------------------------------------
   let currentSymbol = DEFAULT_SYMBOL;
   let stream = null;
+  // The instrument's real last price, used by the LAST stat until the first local fill.
+  let quoteLast = null;
 
   function formatQuote(q) {
     const sign = num(q.change) >= 0 ? "▲" : "▼";
@@ -197,6 +202,11 @@ if (new URLSearchParams(location.search).has("embed")) {
       const response = await fetch(`api/${symbol}/quote`);
       if (!response.ok) return;
       const quote = await response.json();
+      quoteLast = num(quote.last);
+      if (!lastTradeTime) {
+        $("st-last").textContent = quoteLast.toFixed(2);
+        $("st-last").className = "v";
+      }
       $("eyebrow").innerHTML = formatQuote(quote);
     } catch {
       // The book itself already streams fine without a label; leave the eyebrow as-is.
@@ -211,6 +221,7 @@ if (new URLSearchParams(location.search).has("embed")) {
     prevSize = { bid: {}, ask: {} };
     lastTradeTime = 0;
     lastTs = 0;
+    quoteLast = null;
     primeTicketPrice = true;
     events = 0;
     stream = new EventSource(`api/${symbol}/stream`);
@@ -293,10 +304,13 @@ if (new URLSearchParams(location.search).has("embed")) {
     }
   }
 
-  $("symbol-go").onclick = () => switchSymbol($("symbol-input").value);
+  // Enter switches immediately; "change" catches a datalist pick (and a blur after editing).
   $("symbol-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") switchSymbol($("symbol-input").value);
   });
+  $("symbol-input").addEventListener("change", () =>
+    switchSymbol($("symbol-input").value),
+  );
 
   const initialSymbol =
     new URLSearchParams(location.search).get("symbol") || DEFAULT_SYMBOL;
