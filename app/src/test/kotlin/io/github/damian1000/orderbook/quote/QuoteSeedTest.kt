@@ -23,25 +23,39 @@ class QuoteSeedTest {
         )
 
     @Test
-    fun `builds three levels each side, centred on the quote's last price`() {
+    fun `builds six levels each side, centred on the quote's last price`() {
         val seed = QuoteSeed.around(quote("100.00"))
 
         assertEquals(
-            listOf(Price.of("100.10"), Price.of("100.25"), Price.of("100.45")),
+            listOf(
+                Price.of("100.10"),
+                Price.of("100.22"),
+                Price.of("100.34"),
+                Price.of("100.46"),
+                Price.of("100.58"),
+                Price.of("100.70"),
+            ),
             seed.forSide(Side.OFFER).map { it.price },
         )
         assertEquals(
-            listOf(Price.of("99.90"), Price.of("99.75"), Price.of("99.55")),
+            listOf(
+                Price.of("99.90"),
+                Price.of("99.78"),
+                Price.of("99.66"),
+                Price.of("99.54"),
+                Price.of("99.42"),
+                Price.of("99.30"),
+            ),
             seed.forSide(Side.BID).map { it.price },
         )
     }
 
     @Test
-    fun `sizes taper toward the touch, same on both sides`() {
+    fun `sizes vary by level, in the hundreds on both sides`() {
         val seed = QuoteSeed.around(quote("100.00"))
 
-        assertEquals(listOf(10L, 7L, 4L), seed.forSide(Side.OFFER).map { it.size })
-        assertEquals(listOf(10L, 7L, 4L), seed.forSide(Side.BID).map { it.size })
+        assertEquals(listOf(180L, 390L, 280L, 560L, 310L, 420L), seed.forSide(Side.OFFER).map { it.size })
+        assertEquals(listOf(210L, 450L, 330L, 600L, 410L, 520L), seed.forSide(Side.BID).map { it.size })
     }
 
     @Test
@@ -49,11 +63,25 @@ class QuoteSeedTest {
         val seed = QuoteSeed.around(quote("20.00"))
 
         assertEquals(
-            listOf(Price.of("20.02"), Price.of("20.05"), Price.of("20.09")),
+            listOf(
+                Price.of("20.02"),
+                Price.of("20.04"),
+                Price.of("20.07"),
+                Price.of("20.09"),
+                Price.of("20.12"),
+                Price.of("20.14"),
+            ),
             seed.forSide(Side.OFFER).map { it.price },
         )
         assertEquals(
-            listOf(Price.of("19.98"), Price.of("19.95"), Price.of("19.91")),
+            listOf(
+                Price.of("19.98"),
+                Price.of("19.96"),
+                Price.of("19.93"),
+                Price.of("19.91"),
+                Price.of("19.88"),
+                Price.of("19.86"),
+            ),
             seed.forSide(Side.BID).map { it.price },
         )
     }

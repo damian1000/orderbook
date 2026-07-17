@@ -23,12 +23,18 @@ data class SeedLiquidity(
         fun default(): SeedLiquidity =
             SeedLiquidity(
                 listOf(
-                    SeedOrder(Price.of("102.00"), Side.OFFER, 12),
-                    SeedOrder(Price.of("101.50"), Side.OFFER, 8),
-                    SeedOrder(Price.of("101.00"), Side.OFFER, 5),
-                    SeedOrder(Price.of("99.50"), Side.BID, 6),
-                    SeedOrder(Price.of("99.00"), Side.BID, 10),
-                    SeedOrder(Price.of("98.00"), Side.BID, 15),
+                    SeedOrder(Price.of("100.10"), Side.OFFER, 180),
+                    SeedOrder(Price.of("100.22"), Side.OFFER, 390),
+                    SeedOrder(Price.of("100.34"), Side.OFFER, 280),
+                    SeedOrder(Price.of("100.46"), Side.OFFER, 560),
+                    SeedOrder(Price.of("100.58"), Side.OFFER, 310),
+                    SeedOrder(Price.of("100.70"), Side.OFFER, 420),
+                    SeedOrder(Price.of("99.90"), Side.BID, 210),
+                    SeedOrder(Price.of("99.78"), Side.BID, 450),
+                    SeedOrder(Price.of("99.66"), Side.BID, 330),
+                    SeedOrder(Price.of("99.54"), Side.BID, 600),
+                    SeedOrder(Price.of("99.42"), Side.BID, 410),
+                    SeedOrder(Price.of("99.30"), Side.BID, 520),
                 ),
             )
     }
