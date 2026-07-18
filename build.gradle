@@ -1,52 +1,6 @@
+// The root holds only what spans the whole repository — repo-wide formatting and the OWASP
+// aggregate; :core and :app each apply kotlin-conventions and declare their own specifics.
 plugins {
-    id 'org.jetbrains.kotlin.jvm' version '2.3.21' apply false // pinned: CodeQL's Kotlin extractor caps at <2.3.30
+    id 'io.github.damian1000.root-conventions' version '0.3.0'
     id 'me.champeau.jmh' version '0.7.3' apply false
-    id 'com.diffplug.spotless' version '8.8.0'
-    id 'org.owasp.dependencycheck' version '12.2.2'
-}
-
-// Spotless provisions its formatters through the root project.
-repositories {
-    mavenCentral()
-}
-
-// Formatting for the whole repo runs from the root: both modules' Kotlin, the front-end assets,
-// and the config/docs, under the one spotlessCheck CI already gates on.
-spotless {
-    kotlin {
-        target 'core/src/**/*.kt', 'app/src/**/*.kt'
-        ktlint('1.5.0')
-    }
-    kotlinGradle {
-        target '*.gradle.kts'
-        ktlint('1.5.0')
-    }
-    // Front-end assets are held to the same bar as the Kotlin: Prettier formats and the CI
-    // spotlessCheck fails the build on any drift. Needs Node on PATH (present on CI runners).
-    format 'web', {
-        target 'app/src/main/resources/web/**/*.html', 'app/src/main/resources/web/**/*.css', 'app/src/main/resources/web/**/*.js'
-        prettier('3.4.2')
-        trimTrailingWhitespace()
-        endWithNewline()
-    }
-    // YAML CI/devops config and Markdown docs — keep them consistently formatted too.
-    format 'config', {
-        target '.github/**/*.yml', '.github/**/*.yaml', '*.md'
-        prettier('3.4.2')
-        trimTrailingWhitespace()
-        endWithNewline()
-    }
-}
-
-// OWASP dependency vulnerability scanner. Run: ./gradlew dependencyCheckAggregate
-// Fails the build on any dependency with CVSS >= 7.0.
-dependencyCheck {
-    failBuildOnCVSS = 7.0f
-    formats = ['HTML', 'JSON']
-    analyzers {
-        assemblyEnabled = false
-        nodeEnabled = false
-        nodeAuditEnabled = false
-        nuspecEnabled = false
-    }
 }
