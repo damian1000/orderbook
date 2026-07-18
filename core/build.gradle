@@ -2,10 +2,9 @@
 // measure it. No web, no Kafka, no entry point; this is the module published for consumers
 // (JitPack builds it from a tag), and its only runtime dependency is the Disruptor.
 plugins {
+    id 'io.github.damian1000.kotlin-conventions'
     id 'java-library'
-    id 'org.jetbrains.kotlin.jvm'
     id 'me.champeau.jmh'
-    id 'jacoco'
     id 'maven-publish'
 }
 
@@ -13,61 +12,15 @@ group = 'io.github.damian1000'
 version = '1.0.0'
 
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
-    }
     withSourcesJar() // so a consumer's IDE can navigate the source
-}
-
-kotlin {
-    jvmToolchain(25)
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
-    }
-}
-
-repositories {
-    mavenCentral()
 }
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation 'com.lmax:disruptor:4.0.0'
 
-    testImplementation platform("org.junit:junit-bom:6.1.2")
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testImplementation 'org.hamcrest:hamcrest:3.0'
 }
-
-test {
-    useJUnitPlatform()
-    finalizedBy jacocoTestReport
-}
-
-jacocoTestReport {
-    dependsOn test
-    reports {
-        xml.required = true
-        html.required = true
-    }
-}
-
-// The library carries no entry point, so nothing is excluded: every class meets the gate.
-jacocoTestCoverageVerification {
-    dependsOn jacocoTestReport
-    violationRules {
-        rule {
-            limit {
-                counter = 'INSTRUCTION'
-                value = 'COVEREDRATIO'
-                minimum = 0.90
-            }
-        }
-    }
-}
-
-check.dependsOn jacocoTestCoverageVerification
 
 jmh {
     fork = 1

@@ -2,9 +2,9 @@
   "name": "orderbook-web",
   "private": true,
   "type": "module",
-  "description": "Lint tooling for the live order book's front end (app/src/main/resources/web)",
+  "description": "Lint tooling for the live order book's front end (src/main/resources/web)",
   "scripts": {
-    "lint": "eslint app/src/main/resources/web"
+    "lint": "eslint src/main/resources/web"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
