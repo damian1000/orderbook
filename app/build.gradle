@@ -25,14 +25,14 @@ dependencies {
     // Real instrument quotes to seed and label the live book — see QuoteSeed.
     implementation 'com.github.damian1000:market-data:v1.0.0'
     // Egress only — Kafka attaches at the edge (KafkaMarketEgress), never the match path.
-    implementation 'org.apache.kafka:kafka-clients:4.3.1'
+    implementation deps.kafka.clients
     // kafka-clients logs via slf4j; a binding routes producer warnings to stderr -> journalctl.
-    runtimeOnly 'org.slf4j:slf4j-simple:2.0.18'
+    runtimeOnly deps.slf4j.simple
 
-    testImplementation 'org.hamcrest:hamcrest:3.0'
+    testImplementation deps.hamcrest
     // Real-broker integration test for the fills egress; skipped where Docker is absent, runs in CI.
-    testImplementation 'org.testcontainers:junit-jupiter:1.21.4'
-    testImplementation 'org.testcontainers:kafka:1.21.4'
+    testImplementation deps.testcontainers.junit.jupiter
+    testImplementation deps.testcontainers.kafka
 }
 
 // Only the process entry point (WebServerKt — main() binds the real port and blocks) is excluded,
