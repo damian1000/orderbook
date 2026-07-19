@@ -35,7 +35,7 @@ class KafkaMarketEgressTest {
     @Test
     fun `publishes a fill as versioned JSON keyed by symbol on the fills topic`() {
         val producer = producer()
-        val egress = KafkaMarketEgress(producer)
+        val egress = KafkaMarketEgress(producer, executionIds = { "42-1" })
         egress.fill("SIM", trade, 1_000L)
         egress.close()
 
@@ -43,11 +43,24 @@ class KafkaMarketEgressTest {
         assertEquals("orderbook.fills", record.topic())
         assertEquals("SIM", record.key())
         assertEquals(
-            """{"v":1,"symbol":"SIM","price":"101.00000000","size":5,""" +
+            """{"v":1,"execId":"42-1","symbol":"SIM","price":"101.00000000","size":5,""" +
                 """"makerOrderId":7,"takerOrderId":9,"aggressor":"BID","ts":1000}""",
             record.value(),
         )
         assertEquals(1, egress.published)
+    }
+
+    @Test
+    fun `each fill carries its own execution id, stamped at enqueue`() {
+        val producer = producer()
+        var next = 0
+        val egress = KafkaMarketEgress(producer, executionIds = { "42-${++next}" })
+        egress.fill("SIM", trade, 1_000L)
+        egress.fill("SIM", trade, 2_000L)
+        egress.close()
+
+        val ids = producer.history().map { Regex(""""execId":"([^"]+)"""").find(it.value())!!.groupValues[1] }
+        assertEquals(listOf("42-1", "42-2"), ids)
     }
 
     @Test

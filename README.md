@@ -102,6 +102,7 @@ Records are versioned JSON keyed by symbol, so per-symbol ordering holds when mu
 ```json
 {
   "v": 1,
+  "execId": "1720620000000-1",
   "symbol": "SIM",
   "price": "101.00000000",
   "size": 5,
@@ -111,6 +112,11 @@ Records are versioned JSON keyed by symbol, so per-symbol ordering holds when mu
   "ts": 1000
 }
 ```
+
+`execId` is the fill's stable identity — epoch of the egress process plus a monotonic sequence —
+carried in the payload so a downstream consumer can deduplicate the same economic fill wherever
+a copy of the record lands (a redelivery, a dead-letter replay, a republication on another
+topic). Stream coordinates identify a _record_; `execId` identifies the _execution_.
 
 **`orderbook.commands`** — the ordered log of accepted submits (a rejected order never reaches it):
 

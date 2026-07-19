@@ -32,6 +32,8 @@ import java.util.concurrent.atomic.AtomicLong
  * a [SymbolEgress] that closes over one symbol and implements the plain listener seams.
  *
  * Records are versioned JSON keyed by symbol, so per-symbol ordering holds across instruments.
+ * Each fill carries a stable `execId` ([ExecutionIds]) — identity lives in the payload, so the
+ * same economic fill can be recognised wherever a copy of the record lands.
  * Delivery is at-least-once while the broker is reachable; the [dropped] counter is the honest
  * record of any gap. A gap matters differently per topic: the tape is a rebuildable view and each
  * depth snapshot supersedes the last, but a command log with a hole no longer replays to the live
@@ -43,6 +45,7 @@ class KafkaMarketEgress(
     private val commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
     private val l2Topic: String = DEFAULT_L2_TOPIC,
     queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
+    private val executionIds: () -> String = ExecutionIds()::next,
 ) : AutoCloseable {
     private sealed interface Pending
 
@@ -50,6 +53,7 @@ class KafkaMarketEgress(
         val symbol: String,
         val trade: Trade,
         val timeMillis: Long,
+        val execId: String,
     ) : Pending
 
     private data class PendingCommand(
@@ -90,7 +94,7 @@ class KafkaMarketEgress(
         symbol: String,
         trade: Trade,
         timeMillis: Long,
-    ) = enqueue(PendingFill(symbol, trade, timeMillis))
+    ) = enqueue(PendingFill(symbol, trade, timeMillis, executionIds()))
 
     fun submit(
         symbol: String,
@@ -156,7 +160,8 @@ class KafkaMarketEgress(
 
     private fun fillJson(fill: PendingFill): String {
         val trade = fill.trade
-        return """{"v":1,"symbol":${quote(fill.symbol)},"price":${quote(trade.price.toString())},"size":${trade.size},""" +
+        return """{"v":1,"execId":${quote(fill.execId)},"symbol":${quote(fill.symbol)},""" +
+            """"price":${quote(trade.price.toString())},"size":${trade.size},""" +
             """"makerOrderId":${trade.restingOrderId},"takerOrderId":${trade.incomingOrderId},""" +
             """"aggressor":${quote(trade.incomingSide.name)},"ts":${fill.timeMillis}}"""
     }
