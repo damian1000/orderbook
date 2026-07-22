@@ -6,6 +6,7 @@ import io.github.damian1000.marketdata.cache.QuoteCache
 import io.github.damian1000.marketdata.source.YahooQuoteSource
 import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
 import io.github.damian1000.orderbook.kafka.ScramCredentials
+import io.github.damian1000.orderbook.market.BookAtCapacityException
 import io.github.damian1000.orderbook.market.CommandListener
 import io.github.damian1000.orderbook.market.DepthListener
 import io.github.damian1000.orderbook.market.FillListener
@@ -39,7 +40,8 @@ import java.util.concurrent.TimeUnit
  * state would be prefetchable/cacheable — and rate-limited per client ([orderLimiter], keyed by
  * [ClientIp]). An unrecognised symbol shape is a 404 (see [UnknownSymbolException]); invalid
  * order input maps to a 400 with a JSON `error` body; a client past its rate maps to a 429 with
- * `Retry-After`; anything unexpected maps to a 500.
+ * `Retry-After`; a saturated book maps to a 503 (see [BookAtCapacityException]); anything
+ * unexpected maps to a 500.
  */
 class WebServer(
     private val registry: SessionRegistry,
@@ -96,6 +98,10 @@ class WebServer(
             respond(exchange, 404, "application/json", """{"error":${jsonString(e.message ?: "unknown symbol")}}""")
         } catch (e: IllegalArgumentException) {
             respond(exchange, 400, "application/json", """{"error":${jsonString(e.message ?: "bad request")}}""")
+        } catch (e: BookAtCapacityException) {
+            // The book is a bounded, resettable resource; a saturated one can't accept more resting
+            // orders until it drains, so this is a 503, not a client error in the request itself.
+            respond(exchange, 503, "application/json", """{"error":${jsonString(e.message ?: "order book at capacity")}}""")
         } catch (e: Exception) {
             // Anything unexpected must still answer the request — without this the connection
             // just closes with no status line. The stack goes to stderr -> journalctl; the
