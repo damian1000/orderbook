@@ -20,32 +20,42 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Kafka egress for the market's event stream: fills on one topic, the accepted-command log on
- * a second, and the book's latest depth on a third. Never on the match path — the listener callbacks run on the market's writer thread
- * and only enqueue; a dedicated egress thread drains the queue into the [Producer]. When the
- * queue is full — broker down, network slow — the oldest pending event is dropped and counted
- * rather than blocking the writer: the live book must not degrade because the egress is sick.
+ * Kafka egress for the market's event stream: fills on one topic, the accepted-command log on a
+ * second, and the book's latest depth on a third. Never on the match path — the listener
+ * callbacks run on the market's writer thread and only enqueue; a dedicated egress thread
+ * drains into the [Producer].
  *
- * One producer is shared across every symbol's [MarketSession] — [fill]/[submit]/[depth] take the
- * symbol per call rather than fixing it at construction, so a single egress instance serves the
- * whole [SessionRegistry]. A [MarketSession] itself stays symbol-agnostic; [forSymbol] hands it
- * a [SymbolEgress] that closes over one symbol and implements the plain listener seams.
+ * The two channels carry different obligations, so they get different delivery policies:
  *
- * Records are versioned JSON keyed by symbol, so per-symbol ordering holds across instruments.
- * Each fill carries a stable `execId` ([ExecutionIds]) — identity lives in the payload, so the
- * same economic fill can be recognised wherever a copy of the record lands.
- * Delivery is at-least-once while the broker is reachable; the [dropped] counter is the honest
- * record of any gap. A gap matters differently per topic: the tape is a rebuildable view and each
- * depth snapshot supersedes the last, but a command log with a hole no longer replays to the live
- * book's state — the counter is what says whether a log is replayable.
+ * - **Durable** (fills and commands, one queue so their relative order holds): each record is
+ *   sent with a confirmed, blocking ack and stays at the head of the queue until the broker
+ *   accepts it — the queue itself is the retry buffer, so a broker outage shorter than the
+ *   buffer's depth loses nothing. Depth pressure can never evict a fill. Only overflow loses:
+ *   a full durable queue sheds the *newest* event (the buffered prefix stays contiguous and
+ *   ordered) and counts it under [lost] — the alarming counter, and the one that says whether
+ *   the command log still replays.
+ * - **Lossy** (depth): each snapshot supersedes the last, so the queue sheds the *oldest* on
+ *   pressure ([dropped]) and sends are fire-and-forget with failures counted.
+ *
+ * A confirmed send that times out may still land later, so a retry can double-publish the same
+ * record — delivery is at-least-once, and each fill's payload `execId` ([ExecutionIds]) is what
+ * lets a consumer recognise the copy. One producer serves every symbol's `MarketSession` via
+ * [forSymbol]; records are versioned JSON keyed by symbol, so per-symbol ordering holds across
+ * instruments.
+ *
+ * [sleep] paces the durable retry loop and is injectable so tests drive it without real waiting.
  */
 class KafkaMarketEgress(
     private val producer: Producer<String, String>,
     private val fillsTopic: String = DEFAULT_FILLS_TOPIC,
     private val commandsTopic: String = DEFAULT_COMMANDS_TOPIC,
     private val l2Topic: String = DEFAULT_L2_TOPIC,
-    queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
+    durableCapacity: Int = DEFAULT_DURABLE_CAPACITY,
+    depthCapacity: Int = DEFAULT_DEPTH_CAPACITY,
+    private val confirmTimeout: Duration = DEFAULT_CONFIRM_TIMEOUT,
+    private val retryBackoff: Duration = DEFAULT_RETRY_BACKOFF,
     private val executionIds: () -> String = ExecutionIds()::next,
+    private val sleep: (Duration) -> Unit = { Thread.sleep(it) },
 ) : AutoCloseable {
     private sealed interface Pending
 
@@ -64,24 +74,29 @@ class KafkaMarketEgress(
     private data class PendingDepth(
         val symbol: String,
         val snapshot: MarketSnapshot,
-    ) : Pending
+    )
 
-    private val queue = ArrayBlockingQueue<Pending>(queueCapacity)
+    private val durable = ArrayBlockingQueue<Pending>(durableCapacity)
+    private val depths = ArrayBlockingQueue<PendingDepth>(depthCapacity)
     private val egress = Thread(::drain, "kafka-market-egress").apply { isDaemon = true }
     private val droppedCount = AtomicLong()
+    private val lostCount = AtomicLong()
     private val publishedCount = AtomicLong()
     private val failedCount = AtomicLong()
 
     @Volatile
     private var running = false
 
-    /** Events dropped because the queue was full (egress slower than the market). */
+    /** Depth snapshots shed under pressure — each one superseded by the next, so a gap is benign. */
     val dropped: Long get() = droppedCount.get()
 
-    /** Records acknowledged by the broker, across both topics. */
+    /** Fills or commands shed because the durable queue overflowed — the log has a real gap. */
+    val lost: Long get() = lostCount.get()
+
+    /** Records acknowledged by the broker, across all topics. */
     val published: Long get() = publishedCount.get()
 
-    /** Sends that completed with an error (broker unreachable, timeout). */
+    /** Send attempts that completed with an error (broker unreachable, timeout). */
     val failed: Long get() = failedCount.get()
 
     /** Starts the egress thread. Separate from construction so tests can exercise a stopped queue. */
@@ -94,59 +109,82 @@ class KafkaMarketEgress(
         symbol: String,
         trade: Trade,
         timeMillis: Long,
-    ) = enqueue(PendingFill(symbol, trade, timeMillis, executionIds()))
+    ) = enqueueDurable(PendingFill(symbol, trade, timeMillis, executionIds()))
 
     fun submit(
         symbol: String,
         command: SubmitCommand,
-    ) = enqueue(PendingCommand(symbol, command))
+    ) = enqueueDurable(PendingCommand(symbol, command))
 
     fun depth(
         symbol: String,
         snapshot: MarketSnapshot,
-    ) = enqueue(PendingDepth(symbol, snapshot))
+    ) {
+        // Drop-oldest, never block: shedding the stalest snapshot keeps the stream current and
+        // the writer thread unblocked. The loop resolves the race with a concurrent drain.
+        val event = PendingDepth(symbol, snapshot)
+        while (!depths.offer(event)) {
+            if (depths.poll() != null) droppedCount.incrementAndGet()
+        }
+    }
 
     /** The listener seam a single symbol's [MarketSession] is wired to. */
     fun forSymbol(symbol: String): SymbolEgress = SymbolEgress(symbol, this)
 
-    private fun enqueue(event: Pending) {
-        // Drop-oldest, never block: shedding the stalest event keeps the stream current and the
-        // writer thread unblocked. The loop resolves the race with a concurrent drain.
-        while (!queue.offer(event)) {
-            if (queue.poll() != null) droppedCount.incrementAndGet()
-        }
+    private fun enqueueDurable(event: Pending) {
+        // Never block the writer and never evict buffered history: overflow sheds the newest
+        // event so what is already queued stays a contiguous, ordered prefix — and is counted.
+        if (!durable.offer(event)) lostCount.incrementAndGet()
     }
 
     /**
-     * Stops the egress thread, flushes whatever is still queued, and closes the producer.
-     * Never interrupts: an interrupt landing inside `producer.send()` (e.g. its first-send
-     * metadata fetch) kills the send and loses the event — the drain loop notices [running]
-     * within its poll timeout instead, and `producer.close` waits for in-flight acks.
+     * Stops the egress thread, flushes what is still queued — durable records with confirmed
+     * sends, depth best-effort — and closes the producer. Never interrupts: an interrupt landing
+     * inside `producer.send()` kills the send and loses the event; the drain loop notices
+     * [running] within its idle interval instead, and `producer.close` waits for in-flight acks.
      */
     override fun close() {
         running = false
         egress.join(CLOSE_TIMEOUT.toMillis())
-        while (true) send(queue.poll() ?: break)
+        while (true) {
+            val event = durable.poll() ?: break
+            // One confirmed attempt each — the process is exiting, so an unsendable record is
+            // honestly lost, not silently discarded.
+            if (!sendConfirmed(event)) lostCount.incrementAndGet()
+        }
+        while (true) sendAsync(depthRecord(depths.poll() ?: break))
         producer.close(CLOSE_TIMEOUT)
     }
 
     private fun drain() {
         try {
             while (running) {
-                send(queue.poll(100, TimeUnit.MILLISECONDS) ?: continue)
+                while (true) sendAsync(depthRecord(depths.poll() ?: break))
+                val head = durable.peek()
+                when {
+                    head == null -> Thread.sleep(IDLE_INTERVAL_MILLIS)
+                    sendConfirmed(head) -> durable.poll()
+                    else -> sleep(retryBackoff)
+                }
             }
         } catch (_: InterruptedException) {
             // Nothing interrupts this thread on purpose; treat a stray interrupt as shutdown.
         }
     }
 
-    private fun send(event: Pending) {
-        val record =
-            when (event) {
-                is PendingFill -> ProducerRecord(fillsTopic, event.symbol, fillJson(event))
-                is PendingCommand -> ProducerRecord(commandsTopic, event.symbol, commandJson(event))
-                is PendingDepth -> ProducerRecord(l2Topic, event.symbol, depthJson(event))
-            }
+    /** True when the broker acknowledged the record; a failed attempt is counted and retried by the caller. */
+    private fun sendConfirmed(event: Pending): Boolean =
+        try {
+            producer.send(durableRecord(event)).get(confirmTimeout.toMillis(), TimeUnit.MILLISECONDS)
+            publishedCount.incrementAndGet()
+            true
+        } catch (e: Exception) {
+            if (e is InterruptedException) Thread.currentThread().interrupt()
+            failedCount.incrementAndGet()
+            false
+        }
+
+    private fun sendAsync(record: ProducerRecord<String, String>) {
         try {
             producer.send(record) { _, exception ->
                 if (exception == null) publishedCount.incrementAndGet() else failedCount.incrementAndGet()
@@ -157,6 +195,15 @@ class KafkaMarketEgress(
             failedCount.incrementAndGet()
         }
     }
+
+    private fun durableRecord(event: Pending): ProducerRecord<String, String> =
+        when (event) {
+            is PendingFill -> ProducerRecord(fillsTopic, event.symbol, fillJson(event))
+            is PendingCommand -> ProducerRecord(commandsTopic, event.symbol, commandJson(event))
+        }
+
+    private fun depthRecord(pending: PendingDepth): ProducerRecord<String, String> =
+        ProducerRecord(l2Topic, pending.symbol, depthJson(pending))
 
     private fun fillJson(fill: PendingFill): String {
         val trade = fill.trade
@@ -182,12 +229,18 @@ class KafkaMarketEgress(
         const val DEFAULT_FILLS_TOPIC = "orderbook.fills"
         const val DEFAULT_COMMANDS_TOPIC = "orderbook.commands"
         const val DEFAULT_L2_TOPIC = "orderbook.l2"
-        const val DEFAULT_QUEUE_CAPACITY = 4096
+        const val DEFAULT_DURABLE_CAPACITY = 4096
+        const val DEFAULT_DEPTH_CAPACITY = 4096
+
+        /** Longer than `delivery.timeout.ms`, so a send resolves rather than racing its own ack. */
+        val DEFAULT_CONFIRM_TIMEOUT: Duration = Duration.ofSeconds(15)
+        val DEFAULT_RETRY_BACKOFF: Duration = Duration.ofSeconds(1)
+        private const val IDLE_INTERVAL_MILLIS = 100L
         private val CLOSE_TIMEOUT = Duration.ofSeconds(5)
 
         /** A started egress over a real [KafkaProducer]. The timeouts are tightened from the
-         * defaults so a dead broker surfaces as counted failures and drops within seconds instead
-         * of buffering silently for two minutes. With [scram] the producer authenticates over
+         * defaults so a dead broker surfaces as counted failures within seconds instead of
+         * buffering silently for two minutes. With [scram] the producer authenticates over
          * SASL_PLAINTEXT/SCRAM-SHA-256; without it the connection is unauthenticated plaintext. */
         fun create(
             bootstrapServers: String,
