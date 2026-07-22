@@ -7,11 +7,16 @@ import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class SessionRegistryTest {
     // A fake Market that records whether it was ever asked to close, so eviction can be asserted
@@ -131,5 +136,32 @@ class SessionRegistryTest {
         registry.close()
 
         assertTrue(markets.values.all { it.closed })
+    }
+
+    @Test
+    fun `a slow build for one symbol does not block another symbol's access`() {
+        val building = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val registry =
+            SessionRegistry(maxSessions = 20) { symbol ->
+                if (symbol == "SLOW") {
+                    building.countDown()
+                    // Stand in for a slow provider fetch: hold the build open until the test releases it.
+                    release.await()
+                }
+                ManagedSession(FakeMarket(), FakeBroadcaster())
+            }
+        val slowThread = Thread { registry.sessionFor("SLOW") }.apply { start() }
+        try {
+            assertTrue(building.await(2, TimeUnit.SECONDS), "the slow build should have started")
+            // FAST must resolve while SLOW is still building; if the factory ran under the registry
+            // lock this would block until release and the timeout would fire.
+            val fast =
+                assertTimeoutPreemptively(Duration.ofSeconds(2)) { registry.sessionFor("FAST") }
+            assertNotNull(fast)
+        } finally {
+            release.countDown()
+            slowThread.join(2_000)
+        }
     }
 }
