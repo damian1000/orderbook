@@ -28,6 +28,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -427,6 +428,35 @@ class WebServerTest {
     @Test
     fun `quote rejects non-GET methods`() {
         assertEquals(405, request("POST", "/api/SIM/quote").statusCode())
+    }
+
+    @Test
+    fun `a quote aged past the cache max-age is a 503, not a stale 200`() {
+        var now = Instant.parse("2026-07-15T20:00:00Z")
+        val agingQuotes = QuoteCache(fakeQuoteSource, clock = { now }, maxAge = Duration.ofMinutes(1))
+        val agingRegistry =
+            SessionRegistry { symbol ->
+                val cached = agingQuotes.refresh(symbol) ?: throw UnknownSymbolException(symbol)
+                val broadcaster = SseBroadcaster()
+                ManagedSession(MarketSession(seed = QuoteSeed.around(cached.quote), depth = DepthBroadcast(broadcaster)), broadcaster)
+            }
+        val agingServer = WebServer(agingRegistry, agingQuotes, WebAssets.load(), port = 0)
+        agingServer.start()
+        try {
+            fun quote() =
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${agingServer.boundPort}/api/AAPL/quote")).build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertEquals(200, quote().statusCode(), "a fresh quote is served on session creation")
+            now = now.plus(Duration.ofMinutes(2)) // no refresh reaches it; the mark ages past the max-age
+            val stale = quote()
+            assertEquals(503, stale.statusCode())
+            assertTrue(stale.body().contains("unavailable"), stale.body())
+        } finally {
+            agingServer.stop()
+            agingRegistry.close()
+        }
     }
 
     private fun dataFrame(reader: BufferedReader): String {

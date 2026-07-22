@@ -19,6 +19,7 @@ import io.github.damian1000.orderbook.quote.QuoteSeed
 import io.github.damian1000.orderbook.quote.toJson
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.time.Duration
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.SynchronousQueue
@@ -134,10 +135,16 @@ class WebServer(
             "stream" -> get(exchange) { managed.broadcaster.stream(exchange, managed.session.snapshot().toJson()) }
             // The resting book anchors once at session creation; this is the number that keeps
             // ticking on a schedule (see main's quote-refresh loop) without touching the book.
+            // A quote aged out under the cache's max-age (a prolonged provider outage) is withheld
+            // rather than shown stale — a 503, not a fabricated freshness.
             "quote" ->
                 get(exchange) {
-                    val cached = quotes.latest(symbol) ?: error("session exists but no quote cached for $symbol")
-                    respond(exchange, 200, "application/json", cached.quote.toJson())
+                    val cached = quotes.latest(symbol)
+                    if (cached == null) {
+                        respond(exchange, 503, "application/json", """{"error":"quote temporarily unavailable"}""")
+                    } else {
+                        respond(exchange, 200, "application/json", cached.quote.toJson())
+                    }
                 }
         }
     }
@@ -273,7 +280,10 @@ fun main() {
     // The book anchors once, at session creation, to this quote's last price — see QuoteSeed.
     // The displayed reference price then ticks independently on a schedule (below), without ever
     // touching resting orders: no real venue reprices a trader's resting limit orders for them.
-    val quotes = QuoteCache(YahooQuoteSource())
+    // Withhold a displayed quote once it is older than QUOTE_MAX_AGE (a sustained Yahoo outage):
+    // far above the refresh interval, so a healthy refresh keeps it current and only a real outage
+    // trips it. The negative cache (unknown symbols) and last-good behaviour are the cache's defaults.
+    val quotes = QuoteCache(YahooQuoteSource(), maxAge = QUOTE_MAX_AGE)
     // One session per symbol, created on first request and evicted least-recently-used past the
     // cap — see SessionRegistry. A symbol whose quote can't be fetched at all (never resolved
     // before, and this attempt also failed) is unknown, not a fallback to the synthetic ladder —
@@ -321,3 +331,7 @@ fun main() {
 }
 
 private const val QUOTE_REFRESH_INTERVAL_SECONDS = 30L
+
+// Twenty refresh cycles: a healthy 30s refresh keeps a quote far inside this, so it withholds a
+// displayed price only during a sustained provider outage, never in normal operation.
+private val QUOTE_MAX_AGE: Duration = Duration.ofMinutes(10)
