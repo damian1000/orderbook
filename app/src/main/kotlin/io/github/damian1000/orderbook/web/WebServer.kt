@@ -40,7 +40,8 @@ import java.util.concurrent.TimeUnit
  * `/metrics` publishes the Kafka egress counters (see [EgressMetrics]), or `enabled:false` when no
  * egress is wired.
  *
- * Reads are GET; `/api/{symbol}/order` mutates the book, so it is POST-only — a GET that changes
+ * Reads are GET (HEAD answers identically, minus the body); `/api/{symbol}/order` mutates the
+ * book, so it is POST-only — a GET that changes
  * state would be prefetchable/cacheable — and rate-limited per client ([orderLimiter], keyed by
  * [ClientIp]). An unrecognised symbol shape is a 404 (see [UnknownSymbolException]); invalid
  * order input maps to a 400 with a JSON `error` body; a client past its rate maps to a 429 with
@@ -132,7 +133,15 @@ class WebServer(
                 post(exchange) {
                     rateLimited(exchange) { respond(exchange, 200, "application/json", submit(exchange, managed.session)) }
                 }
-            "stream" -> get(exchange) { managed.broadcaster.stream(exchange, managed.session.snapshot().toJson()) }
+            "stream" ->
+                get(exchange) {
+                    // A HEAD must not attach to the broadcaster — it wants headers, not a stream.
+                    if (exchange.requestMethod == "HEAD") {
+                        respond(exchange, 200, "text/event-stream", "")
+                    } else {
+                        managed.broadcaster.stream(exchange, managed.session.snapshot().toJson())
+                    }
+                }
             // The resting book anchors once at session creation; this is the number that keeps
             // ticking on a schedule (see main's quote-refresh loop) without touching the book.
             // A quote aged out under the cache's max-age (a prolonged provider outage) is withheld
@@ -205,10 +214,12 @@ class WebServer(
         return text.toLongOrNull() ?: throw IllegalArgumentException("size is not a valid integer: '$text'")
     }
 
+    // HEAD rides every GET route: the handler runs identically and respond() suppresses the body,
+    // so the status and headers a HEAD probe sees are the ones the GET would have produced.
     private inline fun get(
         exchange: HttpExchange,
         handler: () -> Unit,
-    ) = allow(exchange, "GET", handler)
+    ) = allow(exchange, "GET, HEAD", handler)
 
     private inline fun post(
         exchange: HttpExchange,
@@ -217,13 +228,13 @@ class WebServer(
 
     private inline fun allow(
         exchange: HttpExchange,
-        method: String,
+        methods: String,
         handler: () -> Unit,
     ) {
-        if (exchange.requestMethod == method) {
+        if (exchange.requestMethod in methods.split(", ")) {
             handler()
         } else {
-            exchange.responseHeaders.add("Allow", method)
+            exchange.responseHeaders.add("Allow", methods)
             respond(exchange, 405, "text/plain", "method not allowed")
         }
     }
@@ -252,8 +263,15 @@ class WebServer(
     ) {
         val bytes = body.toByteArray(StandardCharsets.UTF_8)
         exchange.responseHeaders.add("Content-Type", contentType)
-        exchange.sendResponseHeaders(status, bytes.size.toLong())
-        exchange.responseBody.use { it.write(bytes) }
+        if (exchange.requestMethod == "HEAD") {
+            // Headers only: -1 tells the JDK server no body follows, which is the one length it
+            // accepts on a HEAD without logging a warning (it drops Content-Length either way).
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+        } else {
+            exchange.sendResponseHeaders(status, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
     }
 
     companion object {
