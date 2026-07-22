@@ -11,6 +11,7 @@ import org.apache.kafka.common.serialization.StringSerializer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Duration
 
 class KafkaMarketEgressTest {
     private val trade =
@@ -121,7 +122,7 @@ class KafkaMarketEgressTest {
     }
 
     @Test
-    fun `events interleave onto their own topics in submission order`() {
+    fun `fills and commands share one durable queue so their relative order holds`() {
         val producer = producer()
         val egress = KafkaMarketEgress(producer)
         egress.submit("SIM", command)
@@ -131,9 +132,11 @@ class KafkaMarketEgressTest {
         egress.close()
 
         assertEquals(
-            listOf("orderbook.commands", "orderbook.fills", "orderbook.l2", "orderbook.commands"),
-            producer.history().map { it.topic() },
+            listOf("orderbook.commands", "orderbook.fills", "orderbook.commands"),
+            producer.history().map { it.topic() }.filterNot { it == "orderbook.l2" },
+            "the command log and the tape must interleave in submission order",
         )
+        assertEquals(1, producer.history().count { it.topic() == "orderbook.l2" })
         assertEquals(4, egress.published)
     }
 
@@ -153,30 +156,100 @@ class KafkaMarketEgressTest {
     }
 
     @Test
-    fun `a full queue drops the oldest event and counts it`() {
+    fun `a full durable queue sheds the newest fill and counts it as lost — the buffered prefix stays intact`() {
         val producer = producer()
-        // Not started: nothing drains, so capacity 1 forces the drop path deterministically.
-        val egress = KafkaMarketEgress(producer, queueCapacity = 1)
+        // Not started: nothing drains, so capacity 1 forces the overflow path deterministically.
+        val egress = KafkaMarketEgress(producer, durableCapacity = 1)
         egress.fill("SIM", trade, 1L)
         egress.fill("SIM", trade.copy(incomingOrderId = 10), 2L)
         egress.fill("SIM", trade.copy(incomingOrderId = 11), 3L)
 
-        assertEquals(2, egress.dropped, "two older fills should have been shed")
+        assertEquals(2, egress.lost, "two overflow fills should have been counted lost")
+        assertEquals(0, egress.dropped, "durable overflow is loss, not benign depth shedding")
         egress.close()
         val survivor = producer.history().single()
-        assertTrue(survivor.value().contains(""""takerOrderId":11"""), "the newest fill survives, got ${survivor.value()}")
+        assertTrue(survivor.value().contains(""""takerOrderId":9"""), "the buffered oldest fill survives, got ${survivor.value()}")
     }
 
     @Test
-    fun `a failed send is counted, never thrown`() {
+    fun `depth pressure can never evict a fill`() {
+        val producer = producer()
+        val egress = KafkaMarketEgress(producer, durableCapacity = 4, depthCapacity = 2)
+        egress.fill("SIM", trade, 1L)
+        repeat(10) { egress.depth("SIM", snapshot) }
+        egress.close()
+
+        assertEquals(1, producer.history().count { it.topic() == "orderbook.fills" }, "the fill must survive the depth burst")
+        assertEquals(2, producer.history().count { it.topic() == "orderbook.l2" })
+        assertEquals(8, egress.dropped, "stale depth snapshots shed under their own policy")
+        assertEquals(0, egress.lost)
+    }
+
+    @Test
+    fun `a full depth queue drops the oldest snapshot and counts it`() {
+        val producer = producer()
+        val egress = KafkaMarketEgress(producer, depthCapacity = 1)
+        egress.depth("SIM", snapshot)
+        egress.depth("SIM", snapshot.copy(timeMillis = 2_000L))
+
+        assertEquals(1, egress.dropped)
+        egress.close()
+        assertTrue(
+            producer
+                .history()
+                .single()
+                .value()
+                .contains(""""ts":2000"""),
+            "the newest snapshot survives — each one supersedes the last",
+        )
+    }
+
+    @Test
+    fun `a durable record is retried until the broker acks — a transient outage loses nothing`() {
         val producer = producer(autoComplete = false)
-        val egress = KafkaMarketEgress(producer)
+        val egress =
+            KafkaMarketEgress(
+                producer,
+                confirmTimeout = Duration.ofMillis(2_000),
+                sleep = { Thread.sleep(1) },
+            )
+        egress.start()
+        try {
+            egress.fill("SIM", trade, 1L)
+            awaitTrue("first attempt sent") { producer.history().isNotEmpty() }
+            producer.errorNext(RuntimeException("broker down"))
+            awaitTrue("failed attempt counted") { egress.failed >= 1 }
+            awaitTrue("the same record is re-sent") { producer.history().size >= 2 }
+            producer.completeNext()
+            awaitTrue("the retry is acknowledged") { egress.published >= 1 }
+            assertEquals(0, egress.lost, "a transient failure must not lose the fill")
+        } finally {
+            while (producer.errorNext(RuntimeException("drain pending"))) Unit
+            egress.close()
+        }
+    }
+
+    @Test
+    fun `an unsendable record at close is counted lost, never silently discarded`() {
+        val producer = producer(autoComplete = false)
+        val egress = KafkaMarketEgress(producer, confirmTimeout = Duration.ofMillis(50))
         egress.fill("SIM", trade, 1L)
         egress.close()
 
-        assertTrue(producer.errorNext(RuntimeException("broker down")), "a send should be pending")
         assertEquals(1, egress.failed)
+        assertEquals(1, egress.lost)
         assertEquals(0, egress.published)
+    }
+
+    private fun awaitTrue(
+        message: String,
+        condition: () -> Boolean,
+    ) {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!condition()) {
+            assertTrue(System.nanoTime() < deadline, message)
+            Thread.sleep(5)
+        }
     }
 
     @Test

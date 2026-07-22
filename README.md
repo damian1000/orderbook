@@ -93,7 +93,9 @@ Scope: plain limit orders (cross, then rest the remainder). Richer types — mar
 
 ## Kafka egress
 
-The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill, each accepted command, and each depth change crosses a seam (`FillListener` / `CommandListener` / `DepthListener`) that costs the writer a bounded-queue enqueue, and a dedicated egress thread (`KafkaMarketEgress`) drains the queue into one `KafkaProducer` across three topics. If the queue fills — broker down, network stalled — the oldest pending event is dropped and counted rather than blocking the writer, so the live book keeps serving while the `dropped` counter records the gap. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
+The match loop never touches Kafka. `MarketSession` runs on one writer thread; each fill, each accepted command, and each depth change crosses a seam (`FillListener` / `CommandListener` / `DepthListener`) that costs the writer a bounded-queue enqueue, and a dedicated egress thread (`KafkaMarketEgress`) drains into one `KafkaProducer` across three topics.
+
+The two channels carry different obligations, so they get different delivery policies. **Fills and commands are durable**: they share one queue (so their relative order holds), each record is sent with a confirmed ack and stays at the head until the broker accepts it — the queue is the retry buffer, so a broker outage shorter than its depth loses nothing, and depth pressure can never evict a fill. Only overflow loses: a full durable queue sheds the newest event, keeping the buffered history contiguous, and counts it under `lost` — the counter that says whether the command log still replays. **Depth is lossy by design**: each snapshot supersedes the last, so a full depth queue sheds the oldest (`dropped`) and sends are fire-and-forget with failures counted. A confirmed send that times out may still land later, so retries make delivery at-least-once — the fill's `execId` is what lets a consumer recognise the copy. Producer timeouts are tightened (`max.block.ms` 5s, `delivery.timeout.ms` 10s) so a dead broker surfaces as counted failures within seconds instead of buffering silently.
 
 Records are versioned JSON keyed by symbol, so per-symbol ordering holds when multiple instruments exist downstream.
 
@@ -131,7 +133,7 @@ topic). Stream coordinates identify a _record_; `execId` identifies the _executi
 }
 ```
 
-The command log enables deterministic replay: seeding, replenishment, and order ids are all deterministic functions of the seed and the command sequence, so `replay(seed, commands)` rebuilds a fresh session whose snapshot equals the live one — asserted in CI by consuming the log back off a real broker and comparing books. A `dropped` count above zero is the signal a log is no longer replayable.
+The command log enables deterministic replay: seeding, replenishment, and order ids are all deterministic functions of the seed and the command sequence, so `replay(seed, commands)` rebuilds a fresh session whose snapshot equals the live one — asserted in CI by consuming the log back off a real broker and comparing books. A `lost` count above zero is the signal a log is no longer replayable.
 
 **`orderbook.l2`** — the book's latest depth, published after every change: the seeded book once at startup, then one record per accepted submit, each carrying both sides' aggregated levels with cumulative totals (the same shape the front end renders, minus the tape):
 
