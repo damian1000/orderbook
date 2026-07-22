@@ -19,6 +19,8 @@ import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,21 +28,26 @@ import java.util.concurrent.TimeUnit
  * the SSE stream endpoint. Live frames reach each symbol's [Broadcaster] from its market's depth
  * stream via [DepthBroadcast] (wired where the session is built — see [main]); this class only
  * attaches clients to it. Plumbing only — book behaviour lives in the market layer, rendering in
- * the view layer. JDK [HttpServer] on a cached pool, which serves the long-lived SSE streams.
+ * the view layer. JDK [HttpServer] on a request pool capped at [maxPoolThreads]; each SSE stream
+ * pins one pool thread for its connection's lifetime, and requests beyond the cap are refused at
+ * the connection rather than queued.
  *
  * `/api/symbols` lists the curated picker options; `/api/{symbol}/quote` reads the [quotes] cache
  * a background refresh keeps warm (see [main]) — the displayed reference price, not the book.
  *
  * Reads are GET; `/api/{symbol}/order` mutates the book, so it is POST-only — a GET that changes
- * state would be prefetchable/cacheable. An unrecognised symbol shape is a 404 (see
- * [UnknownSymbolException]); invalid order input maps to a 400 with a JSON `error` body; anything
- * unexpected maps to a 500.
+ * state would be prefetchable/cacheable — and rate-limited per client ([orderLimiter], keyed by
+ * [ClientIp]). An unrecognised symbol shape is a 404 (see [UnknownSymbolException]); invalid
+ * order input maps to a 400 with a JSON `error` body; a client past its rate maps to a 429 with
+ * `Retry-After`; anything unexpected maps to a 500.
  */
 class WebServer(
     private val registry: SessionRegistry,
     private val quotes: QuoteCache,
     private val assets: WebAssets,
     private val port: Int,
+    private val orderLimiter: TokenBucketRateLimiter = TokenBucketRateLimiter(capacity = 20, refillPerSecond = 5.0),
+    private val maxPoolThreads: Int = 64,
 ) {
     private lateinit var server: HttpServer
     private lateinit var executor: ExecutorService
@@ -48,7 +55,14 @@ class WebServer(
     /** Binds and starts serving; requesting port 0 binds an ephemeral port (see [boundPort]). */
     fun start() {
         server = HttpServer.create(InetSocketAddress(port), 0)
-        executor = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
+        // Cached-pool reuse and keep-alive but with a hard thread ceiling: SSE streams hold their
+        // pool thread, so an unbounded pool lets slow-reading clients grow memory without limit.
+        // No work queue — a request queued behind saturated SSE streams would wait forever, so
+        // saturation refuses the new connection instead.
+        executor =
+            ThreadPoolExecutor(0, maxPoolThreads, 60L, TimeUnit.SECONDS, SynchronousQueue()) {
+                Thread(it).apply { isDaemon = true }
+            }
         server.executor = executor
         server.createContext("/", ::route)
         server.start()
@@ -102,7 +116,10 @@ class WebServer(
         val symbol = SessionRegistry.normalize(rawSymbol)
         when (action) {
             "state" -> get(exchange) { respond(exchange, 200, "application/json", managed.session.snapshot().toJson()) }
-            "order" -> post(exchange) { respond(exchange, 200, "application/json", submit(exchange, managed.session)) }
+            "order" ->
+                post(exchange) {
+                    rateLimited(exchange) { respond(exchange, 200, "application/json", submit(exchange, managed.session)) }
+                }
             "stream" -> get(exchange) { managed.broadcaster.stream(exchange, managed.session.snapshot().toJson()) }
             // The resting book anchors once at session creation; this is the number that keeps
             // ticking on a schedule (see main's quote-refresh loop) without touching the book.
@@ -111,6 +128,22 @@ class WebServer(
                     val cached = quotes.latest(symbol) ?: error("session exists but no quote cached for $symbol")
                     respond(exchange, 200, "application/json", cached.quote.toJson())
                 }
+        }
+    }
+
+    // Only the state-mutating route is limited; reads stay open. The key follows ClientIp's trust
+    // rule, so traffic through Caddy or the desk is limited per real client, not per proxy.
+    private inline fun rateLimited(
+        exchange: HttpExchange,
+        handler: () -> Unit,
+    ) {
+        val key = ClientIp.of(exchange.remoteAddress.address, exchange.requestHeaders.getFirst("X-Forwarded-For"))
+        val decision = orderLimiter.tryAcquire(key)
+        if (decision.allowed) {
+            handler()
+        } else {
+            exchange.responseHeaders.add("Retry-After", decision.retryAfterSeconds.toString())
+            respond(exchange, 429, "application/json", """{"error":"rate limit exceeded"}""")
         }
     }
 

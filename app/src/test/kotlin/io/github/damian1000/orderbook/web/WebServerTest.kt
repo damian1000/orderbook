@@ -14,10 +14,12 @@ import io.github.damian1000.orderbook.quote.QuoteSeed
 import io.github.damian1000.orderbook.view.MarketSnapshot
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.BufferedReader
+import java.io.IOException
 import java.math.BigDecimal
 import java.net.HttpURLConnection
 import java.net.URI
@@ -177,6 +179,96 @@ class WebServerTest {
     @Test
     fun `a malformed price is a 400`() {
         assertEquals(400, request("POST", "/api/SIM/order?side=BUY&price=abc&size=1").statusCode())
+    }
+
+    @Test
+    fun `order submissions past the per-client rate are a 429 with Retry-After, reads stay open`() {
+        val limited =
+            WebServer(
+                registry,
+                quotes,
+                WebAssets.load(),
+                port = 0,
+                orderLimiter = TokenBucketRateLimiter(capacity = 2, refillPerSecond = 0.1),
+            )
+        limited.start()
+        try {
+            fun order() =
+                client.send(
+                    HttpRequest
+                        .newBuilder(URI("http://localhost:${limited.boundPort}/api/SIM/order?side=BUY&price=100&size=1"))
+                        .POST(HttpRequest.BodyPublishers.noBody())
+                        .build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertEquals(200, order().statusCode())
+            assertEquals(200, order().statusCode())
+            val denied = order()
+            assertEquals(429, denied.statusCode())
+            assertTrue(denied.headers().firstValue("Retry-After").isPresent, "a denial must say when to come back")
+            assertTrue(denied.body().contains("\"error\""))
+            val read =
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${limited.boundPort}/api/SIM/state")).build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertEquals(200, read.statusCode(), "only the write path is limited")
+        } finally {
+            limited.stop()
+        }
+    }
+
+    @Test
+    fun `the rate limit keys per forwarded client when the peer is the local proxy`() {
+        val limited =
+            WebServer(
+                registry,
+                quotes,
+                WebAssets.load(),
+                port = 0,
+                orderLimiter = TokenBucketRateLimiter(capacity = 1, refillPerSecond = 0.1),
+            )
+        limited.start()
+        try {
+            fun order(forwardedFor: String) =
+                client.send(
+                    HttpRequest
+                        .newBuilder(URI("http://localhost:${limited.boundPort}/api/SIM/order?side=BUY&price=100&size=1"))
+                        .header("X-Forwarded-For", forwardedFor)
+                        .POST(HttpRequest.BodyPublishers.noBody())
+                        .build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertEquals(200, order("203.0.113.5").statusCode())
+            assertEquals(429, order("203.0.113.5").statusCode(), "the same forwarded client shares one bucket")
+            assertEquals(200, order("203.0.113.6").statusCode(), "a different forwarded client is unaffected")
+        } finally {
+            limited.stop()
+        }
+    }
+
+    // Rejection happens before any handler runs, so the refused connection closes with no HTTP
+    // status line — the client sees a connection-level failure, which is the documented contract.
+    @Test
+    fun `requests beyond the thread cap are refused rather than queued`() {
+        val bounded = WebServer(registry, quotes, WebAssets.load(), port = 0, maxPoolThreads = 2)
+        bounded.start()
+        val streams = mutableListOf<HttpURLConnection>()
+        try {
+            repeat(2) {
+                val connection =
+                    URI("http://localhost:${bounded.boundPort}/api/SIM/stream").toURL().openConnection() as HttpURLConnection
+                connection.readTimeout = 5_000
+                val reader = connection.inputStream.bufferedReader()
+                assertTrue(dataFrame(reader).contains("\"bids\":["), "each stream should be live before saturating")
+                streams.add(connection)
+            }
+            val request = HttpRequest.newBuilder(URI("http://localhost:${bounded.boundPort}/healthz")).GET().build()
+            assertThrows(IOException::class.java) { client.send(request, HttpResponse.BodyHandlers.ofString()) }
+        } finally {
+            streams.forEach { it.disconnect() }
+            bounded.stop()
+        }
     }
 
     @Test
