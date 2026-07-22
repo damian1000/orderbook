@@ -230,15 +230,34 @@ class KafkaMarketEgressTest {
     }
 
     @Test
-    fun `an unsendable record at close is counted lost, never silently discarded`() {
+    fun `an unsendable record at close is attempted, then counted lost, never silently discarded`() {
         val producer = producer(autoComplete = false)
-        val egress = KafkaMarketEgress(producer, confirmTimeout = Duration.ofMillis(50))
+        // A flush budget leaves room for one confirmed attempt, which times out against the
+        // never-acking producer — counted as a failed send and a lost record.
+        val egress = KafkaMarketEgress(producer, shutdownFlush = Duration.ofMillis(50))
         egress.fill("SIM", trade, 1L)
         egress.close()
 
         assertEquals(1, egress.failed)
         assertEquals(1, egress.lost)
         assertEquals(0, egress.published)
+    }
+
+    @Test
+    fun `a spent flush budget counts the rest lost without a blocking send, so a dead broker can't stall shutdown`() {
+        val producer = producer(autoComplete = false)
+        // Zero budget: the flush is already over on entry, so no record is sent — each is counted
+        // lost at once rather than blocking on an ack that will never come.
+        val egress = KafkaMarketEgress(producer, shutdownFlush = Duration.ZERO)
+        egress.fill("SIM", trade, 1L)
+        egress.fill("SIM", trade.copy(incomingOrderId = 10), 2L)
+        egress.fill("SIM", trade.copy(incomingOrderId = 11), 3L)
+        egress.close()
+
+        assertEquals(3, egress.lost, "every unflushed durable record is accounted for")
+        assertEquals(0, egress.failed, "no send was attempted once the budget was spent")
+        assertEquals(0, egress.published)
+        assertTrue(producer.history().isEmpty(), "no record was handed to the producer")
     }
 
     private fun awaitTrue(

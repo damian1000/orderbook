@@ -54,6 +54,7 @@ class KafkaMarketEgress(
     depthCapacity: Int = DEFAULT_DEPTH_CAPACITY,
     private val confirmTimeout: Duration = DEFAULT_CONFIRM_TIMEOUT,
     private val retryBackoff: Duration = DEFAULT_RETRY_BACKOFF,
+    private val shutdownFlush: Duration = DEFAULT_SHUTDOWN_FLUSH,
     private val executionIds: () -> String = ExecutionIds()::next,
     private val sleep: (Duration) -> Unit = { Thread.sleep(it) },
 ) : AutoCloseable {
@@ -139,18 +140,24 @@ class KafkaMarketEgress(
 
     /**
      * Stops the egress thread, flushes what is still queued — durable records with confirmed
-     * sends, depth best-effort — and closes the producer. Never interrupts: an interrupt landing
-     * inside `producer.send()` kills the send and loses the event; the drain loop notices
-     * [running] within its idle interval instead, and `producer.close` waits for in-flight acks.
+     * sends, depth best-effort — and closes the producer. The durable flush is bounded by
+     * [shutdownFlush]: a healthy broker drains the backlog well within it, but a broker that is
+     * down at shutdown can't hold the process hostage — each send is capped at the time left in
+     * the budget, and once it is spent every remaining durable record is counted [lost] rather
+     * than attempted. Never interrupts: an interrupt landing inside `producer.send()` kills the
+     * send and loses the event; the drain loop notices [running] within its idle interval
+     * instead, and `producer.close` waits for in-flight acks.
      */
     override fun close() {
         running = false
         egress.join(CLOSE_TIMEOUT.toMillis())
+        val deadline = System.nanoTime() + shutdownFlush.toNanos()
         while (true) {
             val event = durable.poll() ?: break
-            // One confirmed attempt each — the process is exiting, so an unsendable record is
-            // honestly lost, not silently discarded.
-            if (!sendConfirmed(event)) lostCount.incrementAndGet()
+            // Cap each send at the time left, so the whole flush can't outlast the budget; once it
+            // is gone, the process is exiting and an unsent record is honestly lost, not discarded.
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0 || !sendConfirmed(event, Duration.ofNanos(remaining))) lostCount.incrementAndGet()
         }
         while (true) sendAsync(depthRecord(depths.poll() ?: break))
         producer.close(CLOSE_TIMEOUT)
@@ -173,9 +180,12 @@ class KafkaMarketEgress(
     }
 
     /** True when the broker acknowledged the record; a failed attempt is counted and retried by the caller. */
-    private fun sendConfirmed(event: Pending): Boolean =
+    private fun sendConfirmed(
+        event: Pending,
+        timeout: Duration = confirmTimeout,
+    ): Boolean =
         try {
-            producer.send(durableRecord(event)).get(confirmTimeout.toMillis(), TimeUnit.MILLISECONDS)
+            producer.send(durableRecord(event)).get(timeout.toMillis().coerceAtLeast(1), TimeUnit.MILLISECONDS)
             publishedCount.incrementAndGet()
             true
         } catch (e: Exception) {
@@ -235,6 +245,10 @@ class KafkaMarketEgress(
         /** Longer than `delivery.timeout.ms`, so a send resolves rather than racing its own ack. */
         val DEFAULT_CONFIRM_TIMEOUT: Duration = Duration.ofSeconds(15)
         val DEFAULT_RETRY_BACKOFF: Duration = Duration.ofSeconds(1)
+
+        /** Bounds the durable flush at shutdown: long enough to drain a backlog against a healthy
+         * broker, short enough that a dead broker can't stall the process past it. */
+        val DEFAULT_SHUTDOWN_FLUSH: Duration = Duration.ofSeconds(5)
         private const val IDLE_INTERVAL_MILLIS = 100L
         private val CLOSE_TIMEOUT = Duration.ofSeconds(5)
 
