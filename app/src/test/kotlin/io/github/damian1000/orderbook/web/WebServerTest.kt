@@ -128,6 +128,31 @@ class WebServerTest {
     }
 
     @Test
+    fun `HEAD answers every GET route with the GET's status and headers, minus the body`() {
+        for (path in listOf("/", "/healthz", "/metrics", "/privacy", "/api/symbols", "/api/SIM/state", "/api/SIM/quote")) {
+            val head = request("HEAD", path)
+            assertEquals(request("GET", path).statusCode(), head.statusCode(), path)
+            assertEquals("", head.body(), path)
+        }
+        assertEquals("text/html; charset=utf-8", request("HEAD", "/").headers().firstValue("Content-Type").get())
+    }
+
+    @Test
+    fun `HEAD on the stream answers headers without attaching to the broadcaster`() {
+        val response = request("HEAD", "/api/SIM/stream")
+        assertEquals(200, response.statusCode())
+        assertEquals("text/event-stream", response.headers().firstValue("Content-Type").get())
+        assertEquals("", response.body())
+    }
+
+    @Test
+    fun `HEAD on the order endpoint stays a 405`() {
+        val response = request("HEAD", "/api/SIM/order")
+        assertEquals(405, response.statusCode())
+        assertEquals("POST", response.headers().firstValue("Allow").get())
+    }
+
+    @Test
     fun `a valid order submits and reports fills`() {
         val response = request("POST", "/api/SIM/order?side=BUY&price=102.00&size=3")
         assertEquals(200, response.statusCode())
