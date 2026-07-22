@@ -132,4 +132,40 @@ class MarketSessionTest {
             assertEquals(2, session.snapshot().tape.size)
         }
     }
+
+    @Test
+    fun `resting orders are capped so the book cannot grow without bound`() {
+        // Seed rests 2 (one per side); a cap of 4 leaves room for exactly two more resting limits.
+        MarketSession(seed = seed, clock = { 1_000L }, maxRestingOrders = 4).use { session ->
+            session.submit(Side.BID, Price.of("98.00"), 1)
+            session.submit(Side.BID, Price.of("97.00"), 1)
+
+            val rejected =
+                assertThrows(BookAtCapacityException::class.java) {
+                    session.submit(Side.BID, Price.of("96.00"), 1)
+                }
+            assertEquals(4, rejected.capacity)
+            // The rejected order never rested: the deepest bid is still the last one accepted.
+            assertEquals(
+                Price.of("97.00"),
+                session
+                    .snapshot()
+                    .bids
+                    .last()
+                    .price,
+            )
+        }
+    }
+
+    @Test
+    fun `a rejected submit at capacity leaves the book and tape untouched`() {
+        MarketSession(seed = seed, clock = { 1_000L }, maxRestingOrders = 2).use { session ->
+            // Already at the cap from the seed alone: even a marketable order is turned away, and
+            // nothing is mutated — no fill prints and the resting book is unchanged.
+            assertThrows(BookAtCapacityException::class.java) { session.submit(Side.BID, Price.of("101.00"), 5) }
+            val snapshot = session.snapshot()
+            assertTrue(snapshot.tape.isEmpty(), "a rejected submit must not print a fill")
+            assertEquals(listOf(Price.of("101.00")), snapshot.asks.map { it.price }, "the resting offer is untouched")
+        }
+    }
 }

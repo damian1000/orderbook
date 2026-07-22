@@ -20,6 +20,9 @@ class PlainOrderBook : OrderBook {
     private val sellOrders: NavigableMap<Price, ArrayDeque<Order>> = TreeMap()
     private val ordersMap: MutableMap<Long, Order> = HashMap()
 
+    /** Resting orders across both sides. O(1) — the id map holds exactly the live orders. */
+    val size: Int get() = ordersMap.size
+
     override fun addOrder(order: Order) {
         val orders = ordersForSide(order.side)
         ordersMap[order.id]?.let { removeOrderFromBook(it) }

@@ -18,6 +18,15 @@ data class SubmitOutcome(
     val snapshot: MarketSnapshot,
 )
 
+/**
+ * A submit was rejected because the book already holds [capacity] resting orders. The book only
+ * ever grows from non-marketable limits, so without a ceiling one symbol's book is unbounded
+ * memory; the book is resettable, so a saturated one recovers on session eviction or restart.
+ */
+class BookAtCapacityException(
+    val capacity: Int,
+) : RuntimeException("order book at capacity: $capacity resting orders")
+
 /** A live market: accept orders, expose the book. The seam the web layer depends on, not the impl. */
 interface Market {
     fun submit(
@@ -40,6 +49,7 @@ class MarketSession(
     private val seed: SeedLiquidity = SeedLiquidity.default(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val tapeLimit: Int = 30,
+    private val maxRestingOrders: Int = DEFAULT_MAX_RESTING_ORDERS,
     private val fills: FillListener = FillListener.NONE,
     private val commands: CommandListener = CommandListener.NONE,
     private val depth: DepthListener = DepthListener.NONE,
@@ -65,6 +75,10 @@ class MarketSession(
     ): SubmitOutcome =
         onWriter {
             val now = clock()
+            // Reject before matching so nothing is mutated: at the cap even a marketable order is
+            // turned away rather than left to rest its remainder. The book only grows from resting
+            // limits, and the cap sits far above any legitimate hand-driven use.
+            if (book.size >= maxRestingOrders) throw BookAtCapacityException(maxRestingOrders)
             val trades = engine.submit(Order(nextId.getAndIncrement(), price, side, size))
             trades.forEach { trade ->
                 tape.addFirst(TapeEntry(trade.price, trade.size, trade.incomingSide, now))
@@ -105,4 +119,9 @@ class MarketSession(
         } catch (e: ExecutionException) {
             throw e.cause ?: e
         }
+
+    companion object {
+        /** Resting-order ceiling per book. Far above hand-driven use; a guard against unbounded growth. */
+        const val DEFAULT_MAX_RESTING_ORDERS = 1000
+    }
 }

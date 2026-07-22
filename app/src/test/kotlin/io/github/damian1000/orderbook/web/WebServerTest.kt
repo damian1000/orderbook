@@ -5,6 +5,7 @@ import io.github.damian1000.marketdata.model.Instrument
 import io.github.damian1000.marketdata.model.Quote
 import io.github.damian1000.marketdata.source.QuoteSource
 import io.github.damian1000.marketdata.source.QuoteUnavailable
+import io.github.damian1000.orderbook.market.BookAtCapacityException
 import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.market.SubmitOutcome
@@ -297,6 +298,36 @@ class WebServerTest {
         } finally {
             failingServer.stop()
             failingRegistry.close()
+        }
+    }
+
+    @Test
+    fun `a submit against a saturated book maps to a 503`() {
+        val atCapacity =
+            object : Market {
+                override fun submit(
+                    side: Side,
+                    price: Price,
+                    size: Long,
+                ): SubmitOutcome = throw BookAtCapacityException(1000)
+
+                override fun snapshot(): MarketSnapshot = throw UnsupportedOperationException("not used")
+            }
+        val registry = SessionRegistry { _ -> ManagedSession(atCapacity, SseBroadcaster()) }
+        val server = WebServer(registry, quotes, WebAssets.load(), port = 0)
+        server.start()
+        try {
+            val request =
+                HttpRequest
+                    .newBuilder(URI("http://localhost:${server.boundPort}/api/SIM/order?side=BUY&price=100&size=1"))
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build()
+            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+            assertEquals(503, response.statusCode())
+            assertTrue(response.body().contains("capacity"), response.body())
+        } finally {
+            server.stop()
+            registry.close()
         }
     }
 
