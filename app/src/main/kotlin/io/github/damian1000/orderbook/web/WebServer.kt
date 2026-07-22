@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.github.damian1000.marketdata.cache.QuoteCache
 import io.github.damian1000.marketdata.source.YahooQuoteSource
+import io.github.damian1000.orderbook.kafka.EgressMetrics
 import io.github.damian1000.orderbook.kafka.KafkaMarketEgress
 import io.github.damian1000.orderbook.kafka.ScramCredentials
 import io.github.damian1000.orderbook.market.BookAtCapacityException
@@ -35,6 +36,8 @@ import java.util.concurrent.TimeUnit
  *
  * `/api/symbols` lists the curated picker options; `/api/{symbol}/quote` reads the [quotes] cache
  * a background refresh keeps warm (see [main]) — the displayed reference price, not the book.
+ * `/metrics` publishes the Kafka egress counters (see [EgressMetrics]), or `enabled:false` when no
+ * egress is wired.
  *
  * Reads are GET; `/api/{symbol}/order` mutates the book, so it is POST-only — a GET that changes
  * state would be prefetchable/cacheable — and rate-limited per client ([orderLimiter], keyed by
@@ -50,6 +53,7 @@ class WebServer(
     private val port: Int,
     private val orderLimiter: TokenBucketRateLimiter = TokenBucketRateLimiter(capacity = 20, refillPerSecond = 5.0),
     private val maxPoolThreads: Int = 64,
+    private val egressMetrics: EgressMetrics? = null,
 ) {
     private lateinit var server: HttpServer
     private lateinit var executor: ExecutorService
@@ -86,6 +90,7 @@ class WebServer(
             val api = API_PATH.matchEntire(path)
             when {
                 path == "/healthz" -> get(exchange) { respond(exchange, 200, "text/plain", "ok") }
+                path == "/metrics" -> get(exchange) { respond(exchange, 200, "application/json", metricsJson()) }
                 path == "/" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml) }
                 path == "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
                 path == "/app.js" -> get(exchange) { respond(exchange, 200, "text/javascript; charset=utf-8", assets.appJs) }
@@ -222,6 +227,14 @@ class WebServer(
             key to java.net.URLDecoder.decode(value, StandardCharsets.UTF_8)
         }
 
+    // The egress is optional (no producer unless Kafka is configured), so the counters are absent
+    // rather than a misleading zero when it isn't running.
+    private fun metricsJson(): String =
+        egressMetrics?.let {
+            """{"egress":{"enabled":true,"published":${it.published},"failed":${it.failed},""" +
+                """"dropped":${it.dropped},"lost":${it.lost}}}"""
+        } ?: """{"egress":{"enabled":false}}"""
+
     private fun jsonString(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     private fun respond(
@@ -292,7 +305,7 @@ fun main() {
         QUOTE_REFRESH_INTERVAL_SECONDS,
         TimeUnit.SECONDS,
     )
-    val server = WebServer(registry, quotes, WebAssets.load(), port)
+    val server = WebServer(registry, quotes, WebAssets.load(), port, egressMetrics = egress)
     // main owns what it wires: on SIGTERM (systemd stop/restart) the server stops accepting,
     // then every open session's broadcaster heartbeat and writer thread are released, and the
     // egress flushes what it holds before the producer closes.

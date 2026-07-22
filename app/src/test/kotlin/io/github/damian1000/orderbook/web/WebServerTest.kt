@@ -5,6 +5,7 @@ import io.github.damian1000.marketdata.model.Instrument
 import io.github.damian1000.marketdata.model.Quote
 import io.github.damian1000.marketdata.source.QuoteSource
 import io.github.damian1000.marketdata.source.QuoteUnavailable
+import io.github.damian1000.orderbook.kafka.EgressMetrics
 import io.github.damian1000.orderbook.market.BookAtCapacityException
 import io.github.damian1000.orderbook.market.Market
 import io.github.damian1000.orderbook.market.MarketSession
@@ -298,6 +299,43 @@ class WebServerTest {
         } finally {
             failingServer.stop()
             failingRegistry.close()
+        }
+    }
+
+    @Test
+    fun `metrics reports egress disabled when no egress is wired`() {
+        val response = request("GET", "/metrics")
+        assertEquals(200, response.statusCode())
+        assertEquals("application/json", response.headers().firstValue("Content-Type").get())
+        assertTrue(response.body().contains(""""enabled":false"""), response.body())
+    }
+
+    @Test
+    fun `metrics publishes the egress counters when an egress is wired`() {
+        val metrics =
+            object : EgressMetrics {
+                override val dropped = 3L
+                override val lost = 1L
+                override val published = 42L
+                override val failed = 2L
+            }
+        val server = WebServer(registry, quotes, WebAssets.load(), port = 0, egressMetrics = metrics)
+        server.start()
+        try {
+            val response =
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${server.boundPort}/metrics")).build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertEquals(200, response.statusCode())
+            val body = response.body()
+            assertTrue(body.contains(""""enabled":true"""), body)
+            assertTrue(body.contains(""""published":42"""), body)
+            assertTrue(body.contains(""""failed":2"""), body)
+            assertTrue(body.contains(""""dropped":3"""), body)
+            assertTrue(body.contains(""""lost":1"""), body)
+        } finally {
+            server.stop()
         }
     }
 

@@ -57,7 +57,8 @@ class KafkaMarketEgress(
     private val shutdownFlush: Duration = DEFAULT_SHUTDOWN_FLUSH,
     private val executionIds: () -> String = ExecutionIds()::next,
     private val sleep: (Duration) -> Unit = { Thread.sleep(it) },
-) : AutoCloseable {
+) : AutoCloseable,
+    EgressMetrics {
     private sealed interface Pending
 
     private data class PendingFill(
@@ -89,16 +90,16 @@ class KafkaMarketEgress(
     private var running = false
 
     /** Depth snapshots shed under pressure — each one superseded by the next, so a gap is benign. */
-    val dropped: Long get() = droppedCount.get()
+    override val dropped: Long get() = droppedCount.get()
 
     /** Fills or commands shed because the durable queue overflowed — the log has a real gap. */
-    val lost: Long get() = lostCount.get()
+    override val lost: Long get() = lostCount.get()
 
     /** Records acknowledged by the broker, across all topics. */
-    val published: Long get() = publishedCount.get()
+    override val published: Long get() = publishedCount.get()
 
     /** Send attempts that completed with an error (broker unreachable, timeout). */
-    val failed: Long get() = failedCount.get()
+    override val failed: Long get() = failedCount.get()
 
     /** Starts the egress thread. Separate from construction so tests can exercise a stopped queue. */
     fun start() {
