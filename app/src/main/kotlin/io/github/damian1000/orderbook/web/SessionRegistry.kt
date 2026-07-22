@@ -26,6 +26,9 @@ class ManagedSession(
  * least-recently-used one once [maxSessions] is exceeded — so free-text symbol entry can't grow
  * memory unboundedly. Backed by an access-ordered [LinkedHashMap]: [sessionFor] both reads and
  * (on a miss) writes, either of which counts as "used" and bumps the entry to the recent end.
+ *
+ * [factory] runs outside the registry lock — it fetches a live quote, and one slow provider call
+ * must not block every other symbol's access. The lock guards only the O(1) map operations.
  */
 class SessionRegistry(
     private val maxSessions: Int = 20,
@@ -47,10 +50,26 @@ class SessionRegistry(
     @Synchronized
     fun symbols(): Set<String> = sessions.keys.toSet()
 
-    @Synchronized
     fun sessionFor(rawSymbol: String): ManagedSession {
         val symbol = normalize(rawSymbol)
-        return sessions.getOrPut(symbol) { factory(symbol) }
+        // Fast path under the lock: the get also bumps recency. The lock is held only for O(1) map
+        // work, never across [factory].
+        synchronized(this) { sessions[symbol] }?.let { return it }
+        // Slow path outside the lock: the factory fetches a live quote, and holding the monitor
+        // across a slow provider call would block every other symbol's access (and the periodic
+        // refresh). A concurrent request for the same new symbol may build in parallel; whoever
+        // loses the re-check closes its now-redundant session.
+        val created = factory(symbol)
+        return synchronized(this) {
+            val existing = sessions[symbol]
+            if (existing != null) {
+                created.close()
+                existing
+            } else {
+                sessions[symbol] = created
+                created
+            }
+        }
     }
 
     @Synchronized
