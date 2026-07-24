@@ -100,6 +100,37 @@ class WebServerTest {
     }
 
     @Test
+    fun `readyz is 200 when the matching engine self-check passes`() {
+        val response = request("GET", "/readyz")
+        assertEquals(200, response.statusCode())
+        assertTrue(response.body().contains(""""ready":true"""), response.body())
+    }
+
+    @Test
+    fun `readyz is 503 when the self-check throws`() {
+        val server =
+            WebServer(
+                registry,
+                quotes,
+                WebAssets.load(),
+                port = 0,
+                readiness = Readiness { throw IllegalStateException("boom") },
+            )
+        server.start()
+        try {
+            val response =
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${server.boundPort}/readyz")).build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertEquals(503, response.statusCode())
+            assertTrue(response.body().contains(""""ready":false"""), response.body())
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
     fun `serves the static front end with content types`() {
         assertTrue(request("GET", "/").body().contains("<html"))
         assertEquals("text/css; charset=utf-8", request("GET", "/app.css").headers().firstValue("Content-Type").get())
@@ -129,7 +160,7 @@ class WebServerTest {
 
     @Test
     fun `HEAD answers every GET route with the GET's status and headers, minus the body`() {
-        for (path in listOf("/", "/healthz", "/metrics", "/privacy", "/api/symbols", "/api/SIM/state", "/api/SIM/quote")) {
+        for (path in listOf("/", "/healthz", "/readyz", "/metrics", "/privacy", "/api/symbols", "/api/SIM/state", "/api/SIM/quote")) {
             val head = request("HEAD", path)
             assertEquals(request("GET", path).statusCode(), head.statusCode(), path)
             assertEquals("", head.body(), path)
