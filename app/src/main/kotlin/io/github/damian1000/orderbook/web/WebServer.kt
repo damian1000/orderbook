@@ -47,6 +47,10 @@ import java.util.concurrent.TimeUnit
  * order input maps to a 400 with a JSON `error` body; a client past its rate maps to a 429 with
  * `Retry-After`; a saturated book maps to a 503 (see [BookAtCapacityException]); anything
  * unexpected maps to a 500.
+ *
+ * `/healthz` proves the web process answers; `/readyz` runs [Readiness]'s matching-engine
+ * self-check (build a synthetic book, fill a marketable order), so a deploy whose matching path
+ * is broken reads as not-ready rather than serving a broken book.
  */
 class WebServer(
     private val registry: SessionRegistry,
@@ -56,6 +60,7 @@ class WebServer(
     private val orderLimiter: TokenBucketRateLimiter = TokenBucketRateLimiter(capacity = 20, refillPerSecond = 5.0),
     private val maxPoolThreads: Int = 64,
     private val egressMetrics: EgressMetrics? = null,
+    private val readiness: Readiness = Readiness.matchingEngine(),
 ) {
     private lateinit var server: HttpServer
     private lateinit var executor: ExecutorService
@@ -92,6 +97,7 @@ class WebServer(
             val api = API_PATH.matchEntire(path)
             when {
                 path == "/healthz" -> get(exchange) { respond(exchange, 200, "text/plain", "ok") }
+                path == "/readyz" -> get(exchange) { ready(exchange) }
                 path == "/metrics" -> get(exchange) { respond(exchange, 200, "application/json", metricsJson()) }
                 path == "/" -> get(exchange) { respond(exchange, 200, "text/html; charset=utf-8", assets.indexHtml) }
                 path == "/app.css" -> get(exchange) { respond(exchange, 200, "text/css; charset=utf-8", assets.appCss) }
@@ -244,6 +250,13 @@ class WebServer(
             val (key, value) = it.split("=", limit = 2)
             key to java.net.URLDecoder.decode(value, StandardCharsets.UTF_8)
         }
+
+    // Liveness says the web process answers; this exercises the matching engine itself, so a deploy
+    // whose matching path is broken is not-ready rather than serving a broken book.
+    private fun ready(exchange: HttpExchange) {
+        val probe = readiness.probe()
+        respond(exchange, if (probe.ready) 200 else 503, "application/json", probe.json)
+    }
 
     // The egress is optional (no producer unless Kafka is configured), so the counters are absent
     // rather than a misleading zero when it isn't running.
