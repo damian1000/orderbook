@@ -11,4 +11,8 @@ before_install:
   - mkdir -p /tmp/jdk25 && tar -xzf /tmp/jdk25.tar.gz -C /tmp/jdk25 --strip-components=1
   - printf '\norg.gradle.java.installations.paths=/tmp/jdk25\n' >> gradle.properties
 install:
-  - ./gradlew --no-daemon :core:publishToMavenLocal
+  # JitPack's builder intermittently fails to resolve services.gradle.org, which the Gradle
+  # wrapper contacts to download its pinned distribution. Retry the whole invocation a bounded
+  # number of times rather than dropping the wrapper: the pinned version is what CI and local
+  # dev build with, and JitPack caches a failed build against the tag permanently.
+  - n=1; until ./gradlew --no-daemon :core:publishToMavenLocal; do n=$((n+1)); if [ "$n" -gt 4 ]; then echo "gradle failed after 4 attempts"; exit 1; fi; echo "retrying, attempt $n"; sleep 20; done
