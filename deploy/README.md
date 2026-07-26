@@ -7,11 +7,16 @@ every merge to `main` by [`.github/workflows/deploy.yml`](../.github/workflows/d
 
 1. **Build once.** The workflow runs the full quality gate (`clean check`) and packages
    the `installDist` distribution into a single artifact — the exact bytes that ship.
-2. **Deploy that artifact.** The deploy job downloads the artifact, copies it to the host
-   over SSH, syncs the version-controlled [`orderbook.service`](orderbook.service) unit,
-   and restarts the service. The previous release is retained at `orderbook-prev/` for
-   rollback.
-3. **Verify.** A health check against `/healthz` gates success; a non-200 fails the deploy.
+2. **Deploy that artifact.** The deploy job downloads the artifact and copies it to the host
+   over SSH, pinning the host key from [`known_hosts.pub`](known_hosts.pub) rather than
+   trusting whatever answers on the address. The release unpacks into
+   `~/releases/orderbook/<commit>` and `~/orderbook` is moved onto it with a symlink rename,
+   so a restart can never see a half-copied install. The version-controlled
+   [`orderbook.service`](orderbook.service) unit syncs only when it differs.
+3. **Verify, or roll back.** A `/readyz` check gates success. If the new release does not come
+   up, the same remote script flips the symlink back to the previous release and restarts —
+   the decision is made on the box, so a runner that dies mid-deploy cannot leave a broken
+   release serving. Three releases are retained.
 
 Secrets (`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`) live in GitHub Actions, never in
 the repo. The deploy user has least-privilege passwordless sudo scoped to managing the unit.
