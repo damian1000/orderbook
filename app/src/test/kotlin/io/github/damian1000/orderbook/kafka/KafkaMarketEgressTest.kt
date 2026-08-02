@@ -260,6 +260,35 @@ class KafkaMarketEgressTest {
         assertTrue(producer.history().isEmpty(), "no record was handed to the producer")
     }
 
+    @Test
+    fun `a drain thread still sending at close keeps the queue — the flush never polls behind it`() {
+        val producer = producer(autoComplete = false)
+        val egress =
+            KafkaMarketEgress(
+                producer,
+                // The drain thread blocks in its confirmed send far longer than close() waits for
+                // it, so close() runs with that thread alive and still owning the queue head —
+                // the interleaving where a concurrent flush poll makes the two threads disagree
+                // about which record the drain thread's own poll removes.
+                confirmTimeout = Duration.ofSeconds(5),
+                closeTimeout = Duration.ofMillis(50),
+                shutdownFlush = Duration.ofMillis(200),
+                sleep = { Thread.sleep(1) },
+            )
+        egress.start()
+        egress.fill("SIM", trade, 1L)
+        egress.fill("SIM", trade.copy(incomingOrderId = 10), 2L)
+        egress.fill("SIM", trade.copy(incomingOrderId = 11), 3L)
+        awaitTrue("the drain thread is inside a confirmed send") { producer.history().size == 1 }
+
+        egress.close()
+
+        assertEquals(1, producer.history().size, "the flush must not send behind the blocked drain thread")
+        assertEquals(0, egress.failed, "no send was attempted while the drain thread held the queue")
+        assertEquals(3, egress.lost, "everything still queued is reported, not silently discarded")
+        assertEquals(0, egress.published)
+    }
+
     private fun awaitTrue(
         message: String,
         condition: () -> Boolean,
