@@ -12,6 +12,16 @@ interface Matcher {
 }
 
 /**
+ * A submit was rejected because [orderId] is already resting. Order ids identify live liquidity, so
+ * reusing one is a client error with no safe interpretation: the book's `addOrder` would replace
+ * the resting order, silently cancelling size its owner still believes is working, and any fill
+ * later reported against that id would be ambiguous between the two orders.
+ */
+class DuplicateOrderIdException(
+    val orderId: Long,
+) : RuntimeException("order id already resting: $orderId")
+
+/**
  * Price-time priority over any [OrderBook]: an order crosses the best opposite levels first,
  * oldest-first within a level, printing each [Trade] at the resting price (so price improvement
  * accrues to the taker); the unfilled remainder rests. Drives only the public book contract, never
@@ -21,6 +31,10 @@ class MatchingEngine(
     private val book: OrderBook,
 ) : Matcher {
     override fun submit(order: Order): List<Trade> {
+        // Checked before a single fill is printed, so a rejected submit leaves the book untouched
+        // rather than half-matched against liquidity it was never entitled to trade with.
+        if (book.contains(order.id)) throw DuplicateOrderIdException(order.id)
+
         val trades = mutableListOf<Trade>()
         var remaining = order.size
         val opposite = order.side.opposite()

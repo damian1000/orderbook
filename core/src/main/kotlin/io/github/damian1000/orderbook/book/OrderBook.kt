@@ -5,8 +5,16 @@ import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
 
 interface OrderBook {
-    /** Adds the order; a duplicate `id` is replaced (last-write-wins). */
+    /**
+     * Adds the order. This is the storage primitive and it does not police identity: a duplicate
+     * `id` replaces the resting order, which silently cancels live liquidity. Callers admitting
+     * client-supplied ids must reject a duplicate first — [contains] is the check, and
+     * [io.github.damian1000.orderbook.engine.MatchingEngine] does it for everything it submits.
+     */
     fun addOrder(order: Order)
+
+    /** True while an order with this id is resting. O(1) — the guard a caller needs before [addOrder]. */
+    fun contains(orderId: Long): Boolean
 
     fun removeOrder(orderId: Long): Boolean
 
