@@ -186,14 +186,19 @@ if (new URLSearchParams(location.search).has("embed")) {
   // The instrument's real last price, used by the LAST stat until the first local fill.
   let quoteLast = null;
 
-  function formatQuote(q) {
-    const sign = num(q.change) >= 0 ? "▲" : "▼";
-    const cls = num(q.change) >= 0 ? "pos" : "neg";
+  // Built as nodes, not markup: name, exchange and currency are whatever the upstream quote
+  // provider sent, and this is the one place their text reaches the page. textContent renders
+  // them as the characters they are, so a provider field carrying markup cannot become markup.
+  function renderQuote(el, q) {
+    const up = num(q.change) >= 0;
+    const move = document.createElement("span");
+    move.className = up ? "pos" : "neg";
+    move.textContent = `${up ? "▲" : "▼"} ${q.last} (${q.changePercent}%)`;
     const status = q.marketOpen ? "open" : "closed";
-    return (
-      `${q.name} · ${q.exchange} · ${q.currency} ` +
-      `<span class="${cls}">${sign} ${q.last} (${q.changePercent}%)</span> ` +
-      `· market ${status} · as of ${time(q.asOfMillis)}`
+    el.replaceChildren(
+      `${q.name} · ${q.exchange} · ${q.currency} `,
+      move,
+      ` · market ${status} · as of ${time(q.asOfMillis)}`,
     );
   }
 
@@ -207,7 +212,7 @@ if (new URLSearchParams(location.search).has("embed")) {
         $("st-last").textContent = quoteLast.toFixed(2);
         $("st-last").className = "v";
       }
-      $("eyebrow").innerHTML = formatQuote(quote);
+      renderQuote($("eyebrow"), quote);
     } catch {
       // The book itself already streams fine without a label; leave the eyebrow as-is.
     }
@@ -258,9 +263,16 @@ if (new URLSearchParams(location.search).has("embed")) {
     try {
       const response = await fetch("api/symbols");
       const symbols = await response.json();
-      $("symbol-list").innerHTML = symbols
-        .map((s) => `<option value="${s.symbol}">${s.name}</option>`)
-        .join("");
+      // Same reasoning as the eyebrow: the issuer name is provider text. A quoted attribute is
+      // the easier of the two to break out of, so build the options rather than the markup.
+      $("symbol-list").replaceChildren(
+        ...symbols.map((s) => {
+          const option = document.createElement("option");
+          option.value = s.symbol;
+          option.textContent = s.name;
+          return option;
+        }),
+      );
     } catch {
       // The picker still accepts free-text entry without the suggestion list.
     }
