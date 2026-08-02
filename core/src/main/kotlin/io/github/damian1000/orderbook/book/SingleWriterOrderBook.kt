@@ -24,6 +24,8 @@ class SingleWriterOrderBook(
 
     override fun addOrder(order: Order) = onWriter { delegate.addOrder(order) }
 
+    override fun contains(orderId: Long): Boolean = onWriter { delegate.contains(orderId) }
+
     override fun removeOrder(orderId: Long): Boolean = onWriter { delegate.removeOrder(orderId) }
 
     override fun modifyOrder(

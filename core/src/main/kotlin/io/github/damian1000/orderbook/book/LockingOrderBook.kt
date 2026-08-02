@@ -18,6 +18,8 @@ class LockingOrderBook(
 
     override fun addOrder(order: Order) = lock.write { delegate.addOrder(order) }
 
+    override fun contains(orderId: Long): Boolean = lock.read { delegate.contains(orderId) }
+
     override fun removeOrder(orderId: Long): Boolean = lock.write { delegate.removeOrder(orderId) }
 
     override fun modifyOrder(

@@ -8,6 +8,7 @@ import io.github.damian1000.orderbook.model.Trade
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 class MatchingEngineTest {
     private val book = PlainOrderBook()
@@ -123,5 +124,41 @@ class MatchingEngineTest {
         )
         assertEquals(8L, book.getTotalSize(Side.BID, 1)) // 10 - 2 left at 99
         assertTrue(book.getOrders(Side.OFFER).isEmpty())
+    }
+
+    @Test
+    fun rejectsAnIdAlreadyResting() {
+        book.addOrder(Order(1L, price("100"), Side.BID, 5L))
+
+        val rejected = assertThrows<DuplicateOrderIdException> { engine.submit(Order(1L, price("99"), Side.BID, 7L)) }
+
+        assertEquals(1L, rejected.orderId)
+        // The resting order is untouched: same price, same size, still the only one on the side.
+        assertEquals(listOf(Order(1L, price("100"), Side.BID, 5L)), book.getOrders(Side.BID))
+    }
+
+    @Test
+    fun rejectsADuplicateBeforePrintingAnyFill() {
+        book.addOrder(Order(1L, price("100"), Side.OFFER, 5L))
+        book.addOrder(Order(2L, price("101"), Side.OFFER, 5L))
+
+        // Marketable against both asks, so without the guard it would fill first and only then
+        // replace its own resting twin — leaving trades printed against a rejected order.
+        assertThrows<DuplicateOrderIdException> { engine.submit(Order(2L, price("101"), Side.BID, 10L)) }
+
+        assertEquals(listOf(1L, 2L), book.getOrders(Side.OFFER).map { it.id })
+        assertEquals(5L, book.getTotalSize(Side.OFFER, 1))
+    }
+
+    @Test
+    fun acceptsAnIdOnceItsOrderHasFullyFilled() {
+        book.addOrder(Order(1L, price("100"), Side.OFFER, 5L))
+        engine.submit(Order(2L, price("100"), Side.BID, 5L)) // takes out order 1 entirely
+
+        // An id identifies live liquidity, not history: once nothing rests under it, it is free.
+        val trades = engine.submit(Order(1L, price("99"), Side.BID, 3L))
+
+        assertTrue(trades.isEmpty())
+        assertEquals(listOf(1L), book.getOrders(Side.BID).map { it.id })
     }
 }

@@ -46,6 +46,8 @@ class TickArrayOrderBook(
         if (wasEmpty) onLevelPopulated(order.side, index)
     }
 
+    override fun contains(orderId: Long): Boolean = ordersMap.containsKey(orderId)
+
     override fun removeOrder(orderId: Long): Boolean {
         val removed = ordersMap.remove(orderId) ?: return false
         removeOrderFromBook(removed)

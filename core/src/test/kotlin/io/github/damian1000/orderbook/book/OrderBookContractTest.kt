@@ -236,4 +236,28 @@ abstract class OrderBookContractTest {
         assertThrows(IllegalArgumentException::class.java) { orderBook.modifyOrder(1L, 0) }
         assertThrows(IllegalArgumentException::class.java) { orderBook.modifyOrder(1L, -1) }
     }
+
+    @Test
+    fun containsReportsOnlyOrdersCurrentlyResting() {
+        assertTrue(orderBook.contains(1L), "resting on the offer side")
+        assertTrue(orderBook.contains(6L), "resting on the bid side")
+        assertFalse(orderBook.contains(7L), "added then removed in setup")
+        assertFalse(orderBook.contains(99L), "never added")
+    }
+
+    @Test
+    fun containsFollowsTheOrderThroughRemoval() {
+        val id = 42L
+        assertFalse(orderBook.contains(id))
+
+        orderBook.addOrder(Order(id, price("14"), Side.BID, 3))
+        assertTrue(orderBook.contains(id))
+
+        // A modify keeps the order resting; only removal releases the id.
+        orderBook.modifyOrder(id, 1)
+        assertTrue(orderBook.contains(id))
+
+        orderBook.removeOrder(id)
+        assertFalse(orderBook.contains(id))
+    }
 }
