@@ -55,6 +55,7 @@ class KafkaMarketEgress(
     private val confirmTimeout: Duration = DEFAULT_CONFIRM_TIMEOUT,
     private val retryBackoff: Duration = DEFAULT_RETRY_BACKOFF,
     private val shutdownFlush: Duration = DEFAULT_SHUTDOWN_FLUSH,
+    private val closeTimeout: Duration = DEFAULT_CLOSE_TIMEOUT,
     private val executionIds: () -> String = ExecutionIds()::next,
     private val sleep: (Duration) -> Unit = { Thread.sleep(it) },
 ) : AutoCloseable,
@@ -148,10 +149,24 @@ class KafkaMarketEgress(
      * than attempted. Never interrupts: an interrupt landing inside `producer.send()` kills the
      * send and loses the event; the drain loop notices [running] within its idle interval
      * instead, and `producer.close` waits for in-flight acks.
+     *
+     * The flush only runs once the drain thread has actually stopped. [closeTimeout] is shorter
+     * than [confirmTimeout], so the join can return with the drain thread still blocked inside a
+     * confirmed send — and that thread has `peek`ed the head without removing it. Flushing anyway
+     * would put two threads on the same queue: the drain thread's `poll` on success removes
+     * whatever is at the head *now*, which after a concurrent flush poll is a different record
+     * that nobody sent, discarded without being counted. So a still-running drain thread keeps
+     * ownership of the queue and the remainder is counted [lost] instead.
      */
     override fun close() {
         running = false
-        egress.join(CLOSE_TIMEOUT.toMillis())
+        egress.join(closeTimeout.toMillis())
+        if (egress.isAlive) countRemainderLost() else flushDurable()
+        while (true) sendAsync(depthRecord(depths.poll() ?: break))
+        producer.close(closeTimeout)
+    }
+
+    private fun flushDurable() {
         val deadline = System.nanoTime() + shutdownFlush.toNanos()
         while (true) {
             val event = durable.poll() ?: break
@@ -160,8 +175,15 @@ class KafkaMarketEgress(
             val remaining = deadline - System.nanoTime()
             if (remaining <= 0 || !sendConfirmed(event, Duration.ofNanos(remaining))) lostCount.incrementAndGet()
         }
-        while (true) sendAsync(depthRecord(depths.poll() ?: break))
-        producer.close(CLOSE_TIMEOUT)
+    }
+
+    // Reports what the flush is declining to send rather than removing it, so the drain thread's
+    // own head stays where that thread expects it. The record it is mid-send may still land and be
+    // counted [published], which makes [lost] an upper bound by at most one at a hard shutdown —
+    // an over-report of a shutdown the broker was already failing, and the safe direction to err
+    // for a counter whose job is to say the log has a gap.
+    private fun countRemainderLost() {
+        lostCount.addAndGet(durable.size.toLong())
     }
 
     private fun drain() {
@@ -251,7 +273,7 @@ class KafkaMarketEgress(
          * broker, short enough that a dead broker can't stall the process past it. */
         val DEFAULT_SHUTDOWN_FLUSH: Duration = Duration.ofSeconds(5)
         private const val IDLE_INTERVAL_MILLIS = 100L
-        private val CLOSE_TIMEOUT = Duration.ofSeconds(5)
+        val DEFAULT_CLOSE_TIMEOUT: Duration = Duration.ofSeconds(5)
 
         /** A started egress over a real [KafkaProducer]. The timeouts are tightened from the
          * defaults so a dead broker surfaces as counted failures within seconds instead of
