@@ -31,9 +31,15 @@ A systemd-managed JVM behind Caddy, on a 1 GB micro VM:
   the SCRAM-SHA-256 credentials it authenticates with — lives root-600 in
   `/etc/orderbook/egress.env` on the box, loaded via an optional `EnvironmentFile`; when the
   file is absent the server runs with the egress off.
-- **[`Caddyfile`](Caddyfile)** reverse-proxies `localhost:8080` and auto-provisions a
-  Let's Encrypt certificate. `flush_interval -1` keeps SSE streams unbuffered.
+- **Caddy** reverse-proxies `localhost:8080` and auto-provisions a Let's Encrypt certificate;
+  `flush_interval -1` keeps SSE streams unbuffered. The host's Caddy configuration is
+  version-controlled and deployed automatically, but not from this repository: it covers every
+  site on the host, so it is maintained as one file in one place rather than as per-service
+  fragments.
+
+The server binds loopback, so it is reachable only through that proxy. Nothing here is exposed
+directly.
 
 systemd + Caddy rather than Docker: the Docker daemon is too heavy for the 1 GB box's
-memory budget. Both unit and proxy config are version-controlled here so the host is
-reproducible rather than hand-edited.
+memory budget. Both the unit here and the proxy configuration are version-controlled and synced
+on diff by a deploy, so the host is reproducible rather than hand-edited.
