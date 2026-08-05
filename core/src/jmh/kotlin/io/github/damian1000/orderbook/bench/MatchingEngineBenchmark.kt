@@ -1,6 +1,6 @@
 package io.github.damian1000.orderbook.bench
 
-import io.github.damian1000.orderbook.book.PlainOrderBook
+import io.github.damian1000.orderbook.book.OrderBook
 import io.github.damian1000.orderbook.engine.MatchingEngine
 import io.github.damian1000.orderbook.model.Order
 import io.github.damian1000.orderbook.model.Price
@@ -22,13 +22,12 @@ import java.util.concurrent.atomic.AtomicLong
  * End-to-end latency + allocation of [MatchingEngine.submit] — the path the live server runs and
  * the optimisation track targets. Measured in [Mode.SampleTime] (p50 / p90 / p99 / p99.9 / max):
  * a submit crosses several book operations and is µs-scale, the regime where JMH's sampling timer
- * is meaningful. The sub-µs raw-book ops in [OrderBookBenchmark] stay [Mode.AverageTime] on purpose
- * — ~25ns of `nanoTime` overhead would swamp a ~16ns lookup. Run with `-prof gc` (the build sets it)
- * for allocations/op; the full opposite-side list that `submit` builds per fill iteration is the
- * allocation this harness exists to expose.
+ * is meaningful. Run with `-prof gc` (the build sets it) for allocations/op.
  *
- * Runs against [PlainOrderBook] directly: single-threaded, so the lock / hand-off of the concurrent
- * wrappers would only add noise to what is a data-structure-and-engine measurement.
+ * Runs against a bare [OrderBook], with no session around it: this measures the data structure and
+ * the engine, and the ring-buffer hand-off that
+ * [io.github.damian1000.orderbook.market.MarketSession] adds is measured separately in
+ * [SessionHandoffBenchmark] so the two costs stay distinguishable.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -40,7 +39,7 @@ open class MatchingEngineBenchmark {
     @Param("50")
     var priceLevels: Int = 0
 
-    private lateinit var book: PlainOrderBook
+    private lateinit var book: OrderBook
     private lateinit var engine: MatchingEngine
     private val nextId = AtomicLong()
 
@@ -51,7 +50,7 @@ open class MatchingEngineBenchmark {
 
     @Setup(Level.Iteration)
     fun setup() {
-        book = PlainOrderBook()
+        book = OrderBook()
         engine = MatchingEngine(book)
         nextId.set(prepopulated.toLong())
         for (i in 0 until prepopulated) {

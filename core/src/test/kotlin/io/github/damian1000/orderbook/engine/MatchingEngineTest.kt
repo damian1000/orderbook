@@ -1,6 +1,6 @@
 package io.github.damian1000.orderbook.engine
 
-import io.github.damian1000.orderbook.book.PlainOrderBook
+import io.github.damian1000.orderbook.book.OrderBook
 import io.github.damian1000.orderbook.model.Order
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 class MatchingEngineTest {
-    private val book = PlainOrderBook()
+    private val book = OrderBook()
     private val engine = MatchingEngine(book)
 
     private fun price(value: String): Price = Price.of(value)

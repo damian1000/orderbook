@@ -3,7 +3,6 @@ package io.github.damian1000.orderbook.book
 import io.github.damian1000.orderbook.model.Order
 import io.github.damian1000.orderbook.model.Price
 import io.github.damian1000.orderbook.model.Side
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -13,21 +12,19 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * Behavioural contract shared by every [OrderBook] implementation. Subclasses
- * supply the implementation under test via [newOrderBook]; the scenarios here
- * must hold identically for the lock-based and single-writer books.
+ * The book's behavioural contract: level pricing and sizing, time priority, id identity, and the
+ * boundaries each operation rejects. Single-threaded, matching how the book is used — concurrent
+ * access is [io.github.damian1000.orderbook.market.MarketSession]'s responsibility and is covered
+ * by its own stress test.
  */
-abstract class OrderBookContractTest {
+class OrderBookTest {
     private lateinit var orderBook: OrderBook
-
-    /** @return a fresh, empty book of the implementation under test. */
-    protected abstract fun newOrderBook(): OrderBook
 
     private fun price(value: String): Price = Price.of(value)
 
     @BeforeEach
     fun setup() {
-        orderBook = newOrderBook()
+        orderBook = OrderBook()
         orderBook.addOrder(Order(1L, price("19"), Side.OFFER, 8))
         orderBook.addOrder(Order(2L, price("19"), Side.OFFER, 4))
         orderBook.addOrder(Order(5L, price("22"), Side.OFFER, 7))
@@ -39,11 +36,6 @@ abstract class OrderBookContractTest {
         orderBook.removeOrder(7L)
         orderBook.addOrder(Order(8L, price("10"), Side.BID, 13))
         orderBook.addOrder(Order(9L, price("10"), Side.BID, 13))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        (orderBook as? AutoCloseable)?.close()
     }
 
     @Test
@@ -201,13 +193,9 @@ abstract class OrderBookContractTest {
 
     @Test
     fun bestRestingOnEmptySideIsNull() {
-        val empty = newOrderBook()
-        try {
-            assertNull(empty.bestResting(Side.OFFER))
-            assertNull(empty.bestResting(Side.BID))
-        } finally {
-            (empty as? AutoCloseable)?.close()
-        }
+        val empty = OrderBook()
+        assertNull(empty.bestResting(Side.OFFER))
+        assertNull(empty.bestResting(Side.BID))
     }
 
     @Test
@@ -220,15 +208,11 @@ abstract class OrderBookContractTest {
 
     @Test
     fun emptyBookGetOrdersReturnsEmptyList() {
-        val empty = newOrderBook()
-        try {
-            assertTrue(empty.getOrders(Side.OFFER).isEmpty())
-            assertTrue(empty.getOrders(Side.BID).isEmpty())
-            assertNull(empty.getPrice(Side.OFFER, 1))
-            assertEquals(0L, empty.getTotalSize(Side.BID, 1))
-        } finally {
-            (empty as? AutoCloseable)?.close()
-        }
+        val empty = OrderBook()
+        assertTrue(empty.getOrders(Side.OFFER).isEmpty())
+        assertTrue(empty.getOrders(Side.BID).isEmpty())
+        assertNull(empty.getPrice(Side.OFFER, 1))
+        assertEquals(0L, empty.getTotalSize(Side.BID, 1))
     }
 
     @Test
