@@ -38,24 +38,7 @@ dependencies {
 // Only the process entry point (WebServerKt — main() binds the real port and blocks) is excluded,
 // like a Spring Boot Application / CLI MainKt. The rest of the web layer — routing, error mapping,
 // SSE fan-out, asset loading — is exercised against a loopback HttpServer and counted.
-def coverageExclusions = ['**/web/WebServerKt.class']
-
-jacocoTestReport {
-    afterEvaluate {
-        classDirectories.setFrom(files(classDirectories.files.collect {
-            fileTree(dir: it, excludes: coverageExclusions)
-        }))
-    }
-}
-
-jacocoTestCoverageVerification {
-    afterEvaluate {
-        classDirectories.setFrom(files(classDirectories.files.collect {
-            fileTree(dir: it, excludes: coverageExclusions)
-        }))
-    }
-}
-
+coverageExcludes = ['**/web/WebServerKt.class']
 jmh {
     fork = 1
     warmupIterations = 3
