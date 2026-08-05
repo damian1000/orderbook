@@ -22,10 +22,11 @@ class DuplicateOrderIdException(
 ) : RuntimeException("order id already resting: $orderId")
 
 /**
- * Price-time priority over any [OrderBook]: an order crosses the best opposite levels first,
+ * Price-time priority over an [OrderBook]: an order crosses the best opposite levels first,
  * oldest-first within a level, printing each [Trade] at the resting price (so price improvement
- * accrues to the taker); the unfilled remainder rests. Drives only the public book contract, never
- * its internals, so the data structure stays an independently benchmarkable component. Not thread-safe.
+ * accrues to the taker); the unfilled remainder rests. Drives only the book's public operations,
+ * never its internals. Not thread-safe: it holds no state of its own, so it is safe exactly where
+ * the book it drives is — on the one thread that owns that book.
  */
 class MatchingEngine(
     private val book: OrderBook,

@@ -4,7 +4,7 @@
 [![CodeQL](https://github.com/damian1000/orderbook/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian1000/orderbook/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/damian1000/orderbook/graph/badge.svg)](https://codecov.io/gh/damian1000/orderbook)
 
-A small, thread-safe **limit order book** and **price-time-priority matching engine** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications — then submit crossing orders and watch them match.
+A small **limit order book** and **price-time-priority matching engine** in Kotlin. Add / modify / remove orders, query the book by side and level, preserving time priority across modifications — then submit crossing orders and watch them match. The book is single-threaded by design; `MarketSession` owns it on one writer thread and serves concurrent callers over a ring buffer.
 
 **▶ Try it live:** https://orderbook.damianhoward.com — pick a real instrument (or type any ticker), submit an order, and watch it match resting liquidity seeded around that instrument's actual last price, printing to the trade tape. Real quotes come from [`market-data`](https://github.com/damian1000/market-data).
 
@@ -24,13 +24,12 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 ## Design
 
 - **Prices are integer ticks.** `Price` is a `@JvmInline value class` over a scaled `Long` (`SCALE = 8` decimal places). Scaled integers keep prices exact — no binary floating-point drift, so two logically equal prices always share a map key — and make comparison a primitive `Long` op. `BigDecimal` is touched only when parsing or formatting a decimal string, never on the matching path.
-- **`PlainOrderBook`** holds the data structure and algorithms, with no concurrency control:
+- **`OrderBook`** holds the data structure and algorithms, with no concurrency control of its own:
   - **`buyOrders`**: `TreeMap<Price, ArrayDeque<Order>>`, reverse ordering — highest bid first.
   - **`sellOrders`**: `TreeMap<Price, ArrayDeque<Order>>`, natural ordering — lowest offer first.
   - **`ordersMap`**: `HashMap<Long, Order>` for O(1) lookup by id (needed for remove / modify).
   - Per-price queues are `ArrayDeque<Order>` — contiguous and cache-friendly, with `addLast` = arrival order = time priority and the head the next to fill.
-- **`TickArrayOrderBook`** is a second core data structure, also with no concurrency control: price levels are addressed directly by tick offset from a fixed reference price into a pre-sized array, instead of a `TreeMap` lookup. It needs an explicit tick size and a bounded price band fixed at construction — see [Design decisions](#design-decisions) and [Complexity](#complexity).
-- **Three concurrency strategies wrap the `PlainOrderBook` core**, differing only in how they serialise access — `LockingOrderBook` (a read/write lock), `SingleWriterOrderBook` (one owning thread via a blocking queue), and `DisruptorOrderBook` (one owning thread via an LMAX Disruptor ring buffer). See [Concurrency](#concurrency).
+- **One thread owns the book.** `MarketSession` runs every operation on a single writer thread and callers reach it over an LMAX Disruptor ring buffer, so no lock guards the data structures. See [Concurrency](#concurrency).
 - **Time priority preserved on modify**: a size change mutates the resting order **in place** (the `ordersMap` and the queue hold the same `Order`), so it keeps its queue position rather than moving to the tail. This is a simplification: real venues keep queue priority on a size _decrease_ but send a size _increase_ to the back of the queue; here any size change retains its place.
 - **Duplicate order ids are rejected at the matcher.** An id names live liquidity, so reusing one has no safe reading: replacing the resting order silently cancels size its owner still believes is working, and a later fill reported against that id is ambiguous between the two orders. `MatchingEngine.submit` checks `OrderBook.contains` before printing any fill and throws `DuplicateOrderIdException`, so a rejected submit leaves the book untouched rather than half-matched. An id becomes free again once nothing rests under it. `addOrder` itself stays a storage primitive and still replaces (so duplicate ids never leave stale orders at old price levels) — callers admitting client-supplied ids guard with `contains`.
 
@@ -47,43 +46,33 @@ Sides: `Side.BID` (buy) and `Side.OFFER` (sell), with `'B'` / `'O'` retained as 
 
 The remove cost could be O(log P) instead of O(log P + N_p) by tracking each order's position in its `ArrayDeque` with an intrusive index map. Trade-off is more bookkeeping for a rarely-hot path.
 
-`TickArrayOrderBook` trades that profile for direct indexing, at the cost of a bounded, pre-sized price band (`B` = configured levels) instead of an unbounded, sparse one:
-
-| Operation                           | Cost                                   | Notes                                                                                                              |
-| ----------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `addOrder`                          | **O(1)**                               | direct array index; updates the best-price pointer only if this level is now the new best                          |
-| `removeOrder`                       | **O(N_p)**, worst case **O(B)**        | O(N_p) removing from the level's `ArrayDeque`; emptying the current best level scans toward the next populated one |
-| `modifyOrder`                       | **O(1)**                               | same in-place mutation as `PlainOrderBook`                                                                         |
-| `getPrice(side, 1)` / `bestResting` | **O(1)**                               | the best-price pointer is maintained, not searched                                                                 |
-| `getPrice(side, level)`             | **O(level)** best case, **O(B)** worst | walks populated levels from the pointer; a sparse book over a wide band costs more than a tree walk                |
-| `getOrders(side)`                   | **O(B + N)**                           | walks the whole band, not just the populated levels                                                                |
-
-A wide, sparse band makes `getOrders` and deep `getPrice` levels slower than `PlainOrderBook`, not faster. See [Benchmarks](#benchmarks) for the measured best-price comparison.
-
 ## Concurrency
 
-Three interchangeable `OrderBook` implementations share the same `PlainOrderBook` core:
+The book is not thread-safe and does not try to be. One thread owns it, runs every read and write on it, and callers reach that thread through an LMAX Disruptor ring buffer — the single-writer principle, which is the design low-latency engines actually use. A lock-free `TreeMap` is not an available alternative; serialising access to a fast structure is.
 
-- **`LockingOrderBook` (lock-based, the recommended default for embedding the book).** Reads (`getPrice`, `getTotalSize`, `getOrders`) take a read lock and see a consistent snapshot for that call; writes (`addOrder`, `modifyOrder`, `removeOrder`) take the write lock. The read/write split lets reads run concurrently.
-- **`SingleWriterOrderBook`.** One owning thread runs every operation serially; callers hand work off and await the result via an `ExecutorService` + `Future.get()`, so no locks touch the data structures — but the hand-off itself still parks the calling thread. This is the practical "lockless" design used by low-latency engines (the single-writer principle), rather than a lock-free `TreeMap`, which isn't achievable. It is `AutoCloseable` — `close()` stops the writer thread.
-- **`DisruptorOrderBook`.** The same single-writer principle, but the hand-off is an LMAX Disruptor ring buffer with a busy-spin wait strategy instead of a blocking queue: a caller publishes to a preallocated slot, then spins on a per-call result holder until the one consumer thread has processed it — no park, no lock, on either side. Also `AutoCloseable`.
+`MarketSession` is what owns the thread. A caller publishes to a preallocated ring-buffer slot and waits on a per-call result holder until the consumer has run it.
 
-The [benchmarks](#benchmarks) compare all three under contention.
+Two details are load-bearing:
+
+- **The hand-off carries a whole session operation, not one book call.** A submit checks capacity, matches, appends to the tape, replenishes a swept side and takes a snapshot. Those steps have to be one indivisible unit — serialising each individual book call instead would let two concurrent submits interleave mid-match and tear it. It is also cheaper: one hand-off per submit rather than one per book operation, and a match makes many.
+- **The wait strategy is injectable, and it blocks by default.** A busy-spin strategy is faster under sustained load, but a process holds one session per open symbol and each owns a thread, so spinning would burn a core per idle book — on a shared 1 GB box that is an outage, not a benchmark. `BlockingWaitStrategy` is what the [live site](https://orderbook.damianhoward.com) runs; benchmarks pass `BusySpinWaitStrategy` to measure what that choice gives up.
+
+On the caller's side the wait is a bounded spin, then a park, for the same reason: spinning covers the microseconds a command usually takes, and parking stops an unbounded number of waiting callers from holding cores when the consumer is slow.
 
 ## Design decisions
 
 - **Prices are scaled `Long` ticks, not `BigDecimal`.** `BigDecimal` looks like the safe default — arbitrary precision, exact decimal arithmetic — but it's wrong for a hot path: every operation allocates, `compareTo`/`hashCode` walk variable-length internal state, and two numerically-equal `BigDecimal`s with different scale (`1.10` vs `1.100`) aren't `.equals()`-equal, which is a landmine for a map key. `Price`'s scaled `Long` (`SCALE = 8`) is a primitive comparison and an inline value class costs nothing beyond the `Long` itself; equal prices are always bit-identical. `BigDecimal` still exists exactly once, at the string parse/format boundary (`Price.of`, `toString`) — never on the matching path.
-- **Book storage is `TreeMap<Price, ArrayDeque<Order>>`, not `ConcurrentHashMap` or an array.** A hash map is rejected outright, not just deprioritised: `getPrice(side, 1)` needs the _best_ price, and a hash map has no ordering, so you'd need a full scan or a parallel sorted index — at which point you've built a worse tree by hand. `TickArrayOrderBook` is the array alternative: a bounded window of price levels addressed directly by tick offset from a reference price, trading `TreeMap`'s O(log P) for O(1) best-price access at the cost of a fixed price band fixed at construction and memory proportional to that band (see [Complexity](#complexity) and [Benchmarks](#benchmarks) for the measured trade-off). `PlainOrderBook`'s `TreeMap` stays the general-purpose default because the book's price range is unbounded and typically sparse; the array-indexed variant is for when the price band is known and bounded and best-price tail latency matters more than generality or deep-level access.
-- **`LockingOrderBook` is the default, not `DisruptorOrderBook`.** `SingleWriterOrderBook`'s blocking-queue hand-off never beat the lock on this hardware — it relocates locking rather than removing it. Swapping that hand-off for a Disruptor busy-spin ring buffer does realise the win the design promises: `DisruptorOrderBook` beats `LockingOrderBook` on every contended workload (see [Benchmarks](#benchmarks)), because serialising every operation through one thread with no park, no lock, and perfect cache locality on the delegate beats a read/write lock's cross-core contention even on reads. The trade-off cuts both ways: uncontended (single-threaded), the ring-buffer hand-off costs more than a near-free read lock — the win only shows up under contention, the regime a live matching engine runs in. That is why `LockingOrderBook` — simpler, no owned thread, no busy-spin CPU burn — stays the recommendation for embedding the book rather than an automatic upgrade. (The [live site](https://orderbook.damianhoward.com) needs neither: its `MarketSession` applies the single-writer principle one layer up — one session thread owns a `PlainOrderBook`, the matching engine, and the tape — so no per-operation lock or ring buffer exists on that path at all, and busy-spinning a core would be the wrong trade on a shared 1 GB box.)
+- **Book storage is `TreeMap<Price, ArrayDeque<Order>>`, not `ConcurrentHashMap` or an array.** A hash map is rejected outright, not just deprioritised: `getPrice(side, 1)` needs the _best_ price, and a hash map has no ordering, so you'd need a full scan or a parallel sorted index — at which point you've built a worse tree by hand. An array ladder indexed by tick offset is the real alternative, and it buys O(1) best-price access; it was measured and not kept, because it needs a tick size and a price band fixed at construction, and this book's price range is unbounded and sparse. A wide sparse band also makes `getOrders` and deep levels slower than the tree, not faster. Revisit it if a bounded band and best-price tail latency ever matter more than generality.
+- **One writer over a ring buffer, chosen by measurement.** Three ways to serialise access were benchmarked against this book: a read/write lock, a single writer fed by a blocking queue, and a single writer fed by a Disruptor ring buffer. The blocking queue never beat the lock — it relocates locking rather than removing it. The ring buffer did, by roughly 1.5× on read-heavy and ~6× on write-heavy contended workloads, because serialising through one thread with no park and no lock beats a read/write lock's cross-core contention even on reads. Uncontended it loses: the hand-off costs more than a near-free read lock. Contention is the regime a matching engine runs in, so the ring buffer ships and the other two are gone rather than kept as alternatives.
 
 ## Matching engine
 
 `MatchingEngine` adds price-time-priority matching on top of any `OrderBook`. A submitted order crosses the best opposite levels first, filling the oldest resting order at each level before moving on; each match prints a `Trade` at the **resting** order's price (so price improvement accrues to the taker), and any unfilled remainder rests on the book as a passive limit order.
 
-It drives only the public `add` / `remove` / `modify` / query contract — never the book's internals — so the data structure stays an independently benchmarked component and any concurrency strategy can be matched on.
+It drives only the public `add` / `remove` / `modify` / query contract — never the book's internals — so the data structure stays an independently benchmarked component. `Matcher` is the seam: the strategy can be replaced without touching the book.
 
 ```kotlin
-val engine = MatchingEngine(LockingOrderBook())
+val engine = MatchingEngine(OrderBook())
 engine.submit(Order(1L, Price.of("101"), Side.OFFER, 5))        // rests: nothing to cross
 val fills = engine.submit(Order(2L, Price.of("101"), Side.BID, 8))
 // fills = [Trade(101.00, size 5, resting=1, incoming=2, BID)]; the remaining 3 rests as the best bid
@@ -155,8 +144,8 @@ The egress is off unless the environment wires it:
 ## Run
 
 ```bash
-./gradlew test     # behavioural contract run against all books + concurrency stress tests
-./gradlew jmh      # JMH micro-benchmarks (single-threaded + contended head-to-head)
+./gradlew test     # the book's behavioural contract + the session's concurrency stress tests
+./gradlew jmh      # JMH micro-benchmarks (book and engine, plus the session hand-off contended)
 ./gradlew run      # the live order-book + matching web app on http://localhost:8080
 ```
 
@@ -164,9 +153,25 @@ The egress is off unless the environment wires it:
 
 JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an 8-core development laptop. **Indicative, not publication-grade** — reproduce on your own hardware before drawing conclusions.
 
-### Single-threaded, lock-based (average time per op)
+### Why one writer over a ring buffer
 
-3×2s warmup + 5×2s measurement, single fork.
+Three ways to serialise access to this book were measured before one was chosen: a read/write lock, a single writer fed by a blocking queue, and a single writer fed by a Disruptor ring buffer. 8 threads, throughput, higher is better.
+
+| Workload                           |    read/write lock |  blocking queue |           ring buffer |
+| ---------------------------------- | -----------------: | --------------: | --------------------: |
+| read-heavy (best bid + best offer) |   2719 ± 94 ops/ms | 250 ± 11 ops/ms | **4192 ± 241** ops/ms |
+| mixed (~90% reads)                 | 1378 ± 1058 ops/ms | 447 ± 11 ops/ms | **5578 ± 374** ops/ms |
+| write-heavy (add + remove)         |   223 ± 135 ops/ms | 168 ± 27 ops/ms |  **1404 ± 74** ops/ms |
+
+The ring buffer won on every contended workload — ~1.5× the lock on read-heavy, ~6× on write-heavy — and with tighter variance (±74 to ±374 against the lock's ±1058 on mixed), so both throughput and stability improved. Serialising through one thread beats concurrent reads under a lock here because the read lock still pays a per-acquisition memory barrier across 8 contending threads, while one owning thread synchronises on nothing at all. The blocking queue never beat the lock: it relocates locking rather than removing it, and pays thread parking and cross-core wakeup on top.
+
+It is not free. Uncontended, the hand-off costs more than a near-free read lock — roughly 854 ns against 493 ns for an `addOrder`+`removeOrder` pair — because spinning has nothing to win when there is no contention to remove. Contention is the regime a matching engine runs in, so the ring buffer ships and the other two were deleted rather than kept as options.
+
+The wait strategy is a separate choice from the mechanism, and the deployed default is `BlockingWaitStrategy`, not the busy-spin one these numbers were taken with. A process holds one session per open symbol and each owns a thread, so spinning would burn a core per idle book on a shared 1 GB host. `SessionHandoffBenchmark` runs both so the size of that trade stays measured rather than assumed.
+
+### Book operations, single-threaded (average time per op)
+
+3×2s warmup + 5×2s measurement, single fork, against a bare book with no session around it.
 
 | Operation                               |   Avg time |
 | --------------------------------------- | ---------: |
@@ -176,25 +181,8 @@ JMH, JDK 25, book pre-populated with 10,000 orders across 50 price levels, on an
 | `modifyOrder` (existing id, same price) | **295 ns** |
 | `addOrder` + `removeOrder` pair         | **493 ns** |
 
-- Best-price lookup is ~16 ns (read-lock overhead included). `TreeMap.firstKey()` is **O(log P)** — it walks the tree's left spine and the result isn't cached — but with ~50 price levels that's only a handful of pointer hops, so it measures effectively flat. Moving price from `Double` to a `Price(Long)` value class did not regress it.
+- Best-price lookup is ~16 ns. `TreeMap.firstKey()` is **O(log P)** — it walks the tree's left spine and the result isn't cached — but with ~50 price levels that's only a handful of pointer hops, so it measures effectively flat. Moving price from `Double` to a `Price(Long)` value class did not regress it.
 - The add/remove pair under ~500 ns is a steady-state number — book size is stationary across the window. (A standalone `addOrder` row is omitted: the book grows unboundedly inside the measurement window, so its average mixes many book sizes.)
-
-### Lock vs single-writer vs Disruptor, contended (8 threads, throughput, higher is better)
-
-5×2s warmup + 8×2s measurement, 2 forks.
-
-| Workload                           | `LockingOrderBook` (lock) | `SingleWriterOrderBook` |  `DisruptorOrderBook` |
-| ---------------------------------- | ------------------------: | ----------------------: | --------------------: |
-| read-heavy (best bid + best offer) |          2719 ± 94 ops/ms |         250 ± 11 ops/ms | **4192 ± 241** ops/ms |
-| mixed (~90% reads)                 |        1378 ± 1058 ops/ms |         447 ± 11 ops/ms | **5578 ± 374** ops/ms |
-| write-heavy (add + remove)         |          223 ± 135 ops/ms |         168 ± 27 ops/ms |  **1404 ± 74** ops/ms |
-
-Reading the table:
-
-- **The Disruptor-backed writer wins on throughput across every workload** — 1.5× the lock on read-heavy, ~6× on write-heavy. `SingleWriterOrderBook`'s blocking-queue hand-off never beat the lock; swapping that hand-off for a busy-spin ring buffer changes the outcome completely, because it removes the two costs that were actually hurting the baseline single writer: thread parking and cross-core wakeup latency.
-- **Serialising everything through one thread turns out to beat concurrent reads under a lock**, on this hardware: `LockingOrderBook`'s read lock still pays a per-acquisition memory-barrier cost across 8 contending threads, while `DisruptorOrderBook` gives the delegate to exactly one thread with no synchronisation at all — the ring buffer's publish/spin overhead is cheaper than that lock contention.
-- **Variance is tight** (±74 to ±374, a few percent of the mean) — none of the lock's wide swings under write contention (±1058 on mixed). Both throughput _and_ stability improve over the lock, not just one.
-- **The win doesn't come for free.** Single-threaded (see the table above), the ring-buffer hand-off costs more than a near-free uncontended read lock (`addOrder`+`removeOrder`: ~854 ns for `DisruptorOrderBook` vs ~493 ns for `LockingOrderBook`) — busy-spinning has nothing to win against when there's no contention to remove. The payoff is specific to the contended regime a live matching engine actually runs in.
 
 ### Submission latency and allocation
 
@@ -207,32 +195,23 @@ End-to-end `MatchingEngine.submit()` — the path the live site runs — measure
 
 The hot path is near-allocation-free by design: the matcher peeks the top of book in **O(log P)** (`bestResting`) rather than materialising the side, a partial fill decrements the resting order's remaining size **in place** rather than replacing it, and the per-price queues are cache-friendly `ArrayDeque`s. The few hundred bytes per submit are the incoming order, the detached snapshot handed back to the caller, and — when it crosses — the emitted `Trade`. The p99.9 tail is occasional GC / JIT / safepoint activity, not the algorithm.
 
-### TreeMap vs array-indexed, best-price lookups
-
-`PlainOrderBook` (TreeMap) vs `TickArrayOrderBook` (array), both single-threaded and unwrapped — a data-structure comparison, not a concurrency one. Same population as the tables above: 10,000 orders, 50 price levels, `SampleTime`.
-
-| Operation (ns/op)               | `treemap` p50 | p90 | p99 | p99.9 | `array` p50 | p90 | p99 | p99.9 |
-| ------------------------------- | ------------: | --: | --: | ----: | ----------: | --: | --: | ----: |
-| `bestResting(BID)`              |            ~0 | 100 | 100 |   200 |          ~0 | 100 | 100 |   200 |
-| `bestResting(OFFER)`            |            ~0 | 100 | 100 |   100 |          ~0 | 100 | 100 |   200 |
-| `addOrder` + `removeOrder` pair |           400 | 500 | 700 |  8677 |         400 | 500 | 700 |  6000 |
-
-At 50 price levels the two are statistically indistinguishable. `TreeMap.firstKey()` only walks ~6 tree nodes (`log2 50`) to find the best price, which is already too cheap for the array's O(1) pointer lookup to show a measurable edge — the win the design promises shows up as `P` grows, not at this depth. `TickArrayOrderBook`'s payoff here is upfront-bounded memory and direct indexing, not a demonstrated latency win over `TreeMap` on a book this shallow; see [Design decisions](#design-decisions) for why it's kept as a second option rather than a replacement.
+An array ladder indexed by tick offset was measured against the `TreeMap` on the same population and came out statistically indistinguishable: `TreeMap.firstKey()` walks only ~6 nodes (`log2 50`) at this depth, already too cheap for an O(1) pointer lookup to beat measurably. It needed a tick size and price band fixed at construction to buy that, so it was not kept — see [Design decisions](#design-decisions).
 
 Reproduce:
 
 ```bash
 ./gradlew jmhJar
-java -jar core/build/libs/core-1.0.0-jmh.jar Contended -f 2 -wi 5 -i 8
-java -jar core/build/libs/core-1.0.0-jmh.jar OrderBookBenchmark -p impl=disruptor -f 1
+java -jar core/build/libs/core-1.0.0-jmh.jar SessionHandoffBenchmark -f 2 -wi 5 -i 8
 java -jar core/build/libs/core-1.0.0-jmh.jar MatchingEngineBenchmark -prof gc
-java -jar core/build/libs/core-1.0.0-jmh.jar TickArrayOrderBookBenchmark -f 1 -wi 3 -i 5 -w 2s -r 2s
 ```
 
 ## Use it
 
+The book itself is single-threaded — one thread owns it. Embed it behind `MarketSession` (which
+provides that thread) if more than one thread will reach it.
+
 ```kotlin
-val book: OrderBook = LockingOrderBook()
+val book = OrderBook()
 
 book.addOrder(Order(id = 1L, price = Price.of("19"), side = Side.OFFER, size = 8))
 book.addOrder(Order(id = 2L, price = Price.of("21"), side = Side.OFFER, size = 16))
