@@ -1,5 +1,6 @@
 package io.github.damian1000.orderbook.web
 
+import io.github.damian1000.orderbook.kafka.EgressMetrics
 import io.github.damian1000.orderbook.market.MarketSession
 import io.github.damian1000.orderbook.model.Side
 
@@ -12,9 +13,19 @@ import io.github.damian1000.orderbook.model.Side
  *
  * The check is injected so a test can force the failure path; the probe swallows any throw into a
  * 503, never dropping the connection.
+ *
+ * The egress counters ride along in the body without affecting the verdict, and that separation is
+ * deliberate. `lost` above zero is this service's most alert-worthy number: fills or commands shed
+ * because the durable queue overflowed, a real gap in the log, unlike `dropped` depth snapshots
+ * which are each superseded by the next. But it is monotonic since process start, so failing
+ * readiness on it would mean 503 forever until a restart, and the deploy gate would roll back every
+ * release after the first incident. A counter is something to alert on; readiness is whether this
+ * process can serve the next request. Reporting it here is what lets a single external probe of
+ * `/readyz` see both.
  */
 class Readiness(
     private val selfCheck: () -> Unit,
+    private val egress: EgressMetrics? = null,
 ) {
     data class Probe(
         val ready: Boolean,
@@ -24,10 +35,19 @@ class Readiness(
     fun probe(): Probe =
         try {
             selfCheck()
-            Probe(true, """{"ready":true,"match":{"ok":true}}""")
+            Probe(true, """{"ready":true,"match":{"ok":true},"egress":${egressJson()}}""")
         } catch (_: Exception) {
-            Probe(false, """{"ready":false,"match":{"ok":false}}""")
+            Probe(false, """{"ready":false,"match":{"ok":false},"egress":${egressJson()}}""")
         }
+
+    // Absent rather than a misleading zero when no producer is configured: "enabled":false says
+    // nothing shipped because nothing was meant to, which is a different fact from shipping
+    // nothing while trying to.
+    private fun egressJson(): String =
+        egress?.let {
+            """{"enabled":true,"published":${it.published},"failed":${it.failed},""" +
+                """"dropped":${it.dropped},"lost":${it.lost}}"""
+        } ?: """{"enabled":false}"""
 
     companion object {
         /**
@@ -35,15 +55,18 @@ class Readiness(
          * quote or Kafka) and fill a marketable buy against it, closing the session's writer thread
          * afterwards. A broken matching path throws and the probe answers 503.
          */
-        fun matchingEngine(): Readiness =
-            Readiness {
-                MarketSession().use { session ->
-                    val book = session.snapshot()
-                    check(book.bids.isNotEmpty() && book.asks.isNotEmpty()) { "seeded book has an empty side" }
-                    check(session.submit(Side.BID, book.asks.first().price, 1).matched > 0) {
-                        "matching engine did not fill a marketable order"
+        fun matchingEngine(egress: EgressMetrics? = null): Readiness =
+            Readiness(
+                selfCheck = {
+                    MarketSession().use { session ->
+                        val book = session.snapshot()
+                        check(book.bids.isNotEmpty() && book.asks.isNotEmpty()) { "seeded book has an empty side" }
+                        check(session.submit(Side.BID, book.asks.first().price, 1).matched > 0) {
+                            "matching engine did not fill a marketable order"
+                        }
                     }
-                }
-            }
+                },
+                egress = egress,
+            )
     }
 }

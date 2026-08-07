@@ -61,7 +61,7 @@ class WebServer(
     private val orderLimiter: TokenBucketRateLimiter = TokenBucketRateLimiter(capacity = 20, refillPerSecond = 5.0),
     private val maxPoolThreads: Int = 64,
     private val egressMetrics: EgressMetrics? = null,
-    private val readiness: Readiness = Readiness.matchingEngine(),
+    private val readiness: Readiness = Readiness.matchingEngine(egressMetrics),
     /**
      * Loopback by default: this server is meant to be reached through the reverse proxy that
      * terminates TLS, applies the security headers and writes the access log, never directly.
