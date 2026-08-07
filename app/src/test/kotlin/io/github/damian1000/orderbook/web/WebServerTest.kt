@@ -114,7 +114,7 @@ class WebServerTest {
                 quotes,
                 WebAssets.load(),
                 port = 0,
-                readiness = Readiness { throw IllegalStateException("boom") },
+                readiness = Readiness(selfCheck = { throw IllegalStateException("boom") }),
             )
         server.start()
         try {
